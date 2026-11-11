@@ -1,0 +1,148 @@
+# ============================================================================
+# Online Learning Platform (LMS Monorepo) — Root .gitignore
+# Covers: backend/ (Express + TypeScript + Prisma), frontend/ (Next.js),
+#         deploy/ (PM2 + Nginx + MySQL backups), and local dev/IDE artifacts
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# 1. Dependencies
+# ----------------------------------------------------------------------------
+node_modules/
+**/node_modules/
+.pnp
+.pnp.js
+.yarn/install-state.gz
+
+# ----------------------------------------------------------------------------
+# 2. Environment Variables & Secrets (Keep .env.example tracked)
+# ----------------------------------------------------------------------------
+.env
+.env.local
+.env.development
+.env.development.local
+.env.test
+.env.test.local
+.env.production
+.env.production.local
+.env.*.local
+**/.env
+**/.env.local
+**/.env.development
+**/.env.test
+**/.env.production
+!**/.env.example
+!backend/.env.example
+!frontend/.env.example
+
+# ----------------------------------------------------------------------------
+# 3. Backend (Express + TypeScript + Prisma + Local VPS Storage)
+# ----------------------------------------------------------------------------
+backend/dist/
+backend/build/
+dist/
+build/
+*.tsbuildinfo
+**/*.tsbuildinfo
+
+# Local file storage / course materials / assignment & certificate uploads
+backend/storage/
+backend/uploads/
+backend/tmp/
+storage/
+uploads/
+tmp/
+temp/
+
+# SQLite / local test databases (if ever used locally)
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# ----------------------------------------------------------------------------
+# 4. Frontend (Next.js App Router)
+# ----------------------------------------------------------------------------
+frontend/.next/
+frontend/out/
+frontend/build/
+.next/
+out/
+.vercel/
+next-env.d.ts.bak
+
+# ----------------------------------------------------------------------------
+# 5. Deployment, Logs, PM2 & Database Backups
+# ----------------------------------------------------------------------------
+logs/
+**/logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+.pm2/
+*.pid
+*.seed
+*.pid.lock
+
+# Database dumps & backup archives (never commit production data dumps)
+*.sql.gz
+*.dump
+*.bak
+deploy/backups/
+backups/
+# Keep Prisma migrations tracked while ignoring ad-hoc root SQL dumps
+/*.sql
+/backend/*.sql
+/deploy/*.sql
+
+# SSL certificates & private keys
+*.pem
+*.key
+*.crt
+*.csr
+*.p12
+
+# ----------------------------------------------------------------------------
+# 6. Testing & Code Coverage
+# ----------------------------------------------------------------------------
+coverage/
+**/coverage/
+.nyc_output/
+*.lcov
+junit.xml
+
+# ----------------------------------------------------------------------------
+# 7. IDEs, Editors & OS Metadata
+# ----------------------------------------------------------------------------
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json.example
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.swp
+*.swo
+*~
+
+# macOS / Windows / Linux
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Local update/patch archives
+*.zip
+*.tar.gz
+*.tgz
+*.rar
+*.7z

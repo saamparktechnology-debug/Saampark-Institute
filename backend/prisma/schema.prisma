@@ -1,0 +1,1052 @@
+// ============================================================================
+// Online Learning Platform (Gemini Argon) — Prisma Schema
+// Database: MySQL 8.x (Single-Institute Modular Monolith on Hostinger VPS)
+// Decisions: C-001..C-031 (UUID PKs, Decimal(12,2) Money, Append-Only Ledgers)
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ----------------------------------------------------------------------------
+// ENUMS
+// ----------------------------------------------------------------------------
+
+enum RoleType {
+  ADMIN
+  STUDENT
+  TEACHER
+  SUPPORT
+}
+
+enum AccountStatus {
+  ACTIVE
+  PENDING
+  SUSPENDED
+  DISABLED
+}
+
+enum CourseStatus {
+  DRAFT
+  REVIEW
+  PUBLISHED
+  ARCHIVED
+}
+
+enum TeacherAssignmentRole {
+  PRIMARY
+  CO_INSTRUCTOR
+  TEACHING_ASSISTANT
+}
+
+enum AssignmentStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum PaymentPlanType {
+  FULL
+  INSTALLMENT
+}
+
+enum EnrollmentStatus {
+  PENDING_PAYMENT
+  ACTIVE
+  SUSPENDED_OVERDUE
+  COMPLETED
+  CANCELLED
+  REFUNDED
+}
+
+enum InstallmentStatus {
+  PENDING
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+enum PaymentProviderType {
+  RAZORPAY
+  WALLET
+  MANUAL
+}
+
+enum PaymentStatus {
+  CREATED
+  AUTHORIZED
+  CAPTURED
+  FAILED
+  REFUNDED
+}
+
+enum WalletTransactionType {
+  REFERRAL_REWARD
+  COURSE_PURCHASE_DEBIT
+  REDEMPTION_RESERVE
+  REDEMPTION_SETTLED
+  REDEMPTION_REVERSAL
+  ADMIN_ADJUSTMENT
+  REFUND_CREDIT
+}
+
+enum LedgerDirection {
+  CREDIT
+  DEBIT
+}
+
+enum LedgerEntryStatus {
+  PENDING
+  POSTED
+  REVERSED
+}
+
+enum ReferralStatus {
+  ATTRIBUTED
+  QUALIFIED
+  REWARDED
+  REVERSED
+}
+
+enum RedemptionStatus {
+  REQUESTED
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  PAID
+  FAILED
+}
+
+enum PayoutStatus {
+  DRAFT
+  APPROVED
+  PAID
+  CANCELLED
+}
+
+enum LiveClassStatus {
+  SCHEDULED
+  LIVE
+  ENDED
+  CANCELLED
+}
+
+enum AttendanceSessionStatus {
+  OPEN
+  CLOSED
+  FINALIZED
+}
+
+enum AttendanceMarkStatus {
+  PRESENT
+  LATE
+  ABSENT
+  EXCUSED
+}
+
+enum AttendanceSource {
+  CODE
+  MANUAL
+}
+
+enum QuestionType {
+  MCQ_SINGLE
+  MCQ_MULTI
+  TRUE_FALSE
+  SHORT_ANSWER
+  LONG_ANSWER
+}
+
+enum SubmissionStatus {
+  SUBMITTED
+  LATE
+  GRADED
+  RESUBMIT_REQUESTED
+}
+
+enum ExamAttemptStatus {
+  IN_PROGRESS
+  SUBMITTED
+  EVALUATED
+}
+
+enum CertificateStatus {
+  ISSUED
+  REVOKED
+}
+
+enum TicketCategory {
+  STUDENT_QUERY
+  TEACHER_QUERY
+  PAYMENT_ISSUE
+  ENROLLMENT_ISSUE
+  COURSE_ISSUE
+  LIVE_CLASS_ISSUE
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT_RED
+}
+
+enum TicketStatus {
+  INCOMING
+  IN_TRIAGE
+  ESCALATED
+  RESOLVED
+  CLOSED
+}
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  SMS
+}
+
+// ----------------------------------------------------------------------------
+// 1. IDENTITY, ROLES, PERMISSIONS & SESSIONS (C-002, C-003, C-025)
+// ----------------------------------------------------------------------------
+
+model User {
+  id              String        @id @default(uuid()) @db.Char(36)
+  email           String        @unique @db.VarChar(255)
+  phone           String?       @unique @db.VarChar(32)
+  passwordHash    String        @db.VarChar(255)
+  fullName        String        @db.VarChar(150)
+  avatarUrl       String?       @db.VarChar(500)
+  role            RoleType      @default(STUDENT)
+  status          AccountStatus @default(ACTIVE)
+  emailVerifiedAt DateTime?
+  phoneVerifiedAt DateTime?
+  lastLoginAt     DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  // Profiles
+  studentProfile      StudentProfile?
+  teacherProfile      TeacherProfile?
+  supportAgentProfile SupportAgentProfile?
+
+  // Security & RBAC
+  sessions        Session[]
+  userPermissions UserPermission[]
+
+  // Academic & Financial Relations
+  teacherAssignments    CourseTeacherAssignment[]
+  enrollments           Enrollment[]
+  paymentTransactions   PaymentTransaction[]
+  wallet                Wallet?
+  referralCode          ReferralCode?
+  referralsMade         Referral[]                @relation("ReferrerUser")
+  referralAttributed    Referral?                 @relation("ReferredUser")
+  redemptionRequests    RedemptionRequest[]       @relation("RedemptionRequester")
+  redemptionsReviewed   RedemptionRequest[]       @relation("RedemptionReviewer")
+  teacherPayouts        TeacherPayout[]           @relation("TeacherPayoutRecipient")
+  payoutsApproved       TeacherPayout[]           @relation("TeacherPayoutApprover")
+  liveClassesHosted     LiveClass[]
+  liveParticipations    LiveClassParticipant[]
+  attendanceSessions    AttendanceSession[]
+  attendanceRecords     AttendanceRecord[]        @relation("StudentAttendance")
+  attendanceCorrections AttendanceRecord[]        @relation("TeacherAttendanceCorrector")
+  assignmentSubmissions AssignmentSubmission[]    @relation("StudentSubmissions")
+  gradedSubmissions     AssignmentSubmission[]    @relation("TeacherGradedSubmissions")
+  examAttempts          ExamAttempt[]
+  certificates          Certificate[]
+  ticketsCreated        SupportTicket[]           @relation("TicketCreator")
+  ticketsAssigned       SupportTicket[]           @relation("TicketAssignee")
+  ticketMessages        SupportTicketMessage[]
+  notifications         Notification[]
+  auditLogs             AuditLog[]
+
+  @@index([role, status])
+  @@map("users")
+}
+
+model StudentProfile {
+  id            String    @id @default(uuid()) @db.Char(36)
+  userId        String    @unique @db.Char(36)
+  studentCode   String    @unique @db.VarChar(32)
+  dateOfBirth   DateTime? @db.Date
+  gradeLevel    String?   @db.VarChar(64)
+  guardianName  String?   @db.VarChar(150)
+  guardianPhone String?   @db.VarChar(32)
+  address       String?   @db.Text
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("student_profiles")
+}
+
+model TeacherProfile {
+  id                         String   @id @default(uuid()) @db.Char(36)
+  userId                     String   @unique @db.Char(36)
+  teacherCode                String   @unique @db.VarChar(32)
+  qualification              String?  @db.VarChar(255)
+  specialization             String?  @db.VarChar(255)
+  biography                  String?  @db.Text
+  defaultRevenueSharePercent Decimal  @default(30.00) @db.Decimal(5, 2)
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("teacher_profiles")
+}
+
+model SupportAgentProfile {
+  id                   String   @id @default(uuid()) @db.Char(36)
+  userId               String   @unique @db.Char(36)
+  agentCode            String   @unique @db.VarChar(32)
+  department           String   @default("GENERAL") @db.VarChar(64)
+  isTriageLead         Boolean  @default(false)
+  maxConcurrentTickets Int      @default(20)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("support_agent_profiles")
+}
+
+model Permission {
+  id          String   @id @default(uuid()) @db.Char(36)
+  code        String   @unique @db.VarChar(120)
+  module      String   @db.VarChar(64)
+  description String   @db.VarChar(255)
+  createdAt   DateTime @default(now())
+
+  rolePermissions RolePermission[]
+  userPermissions UserPermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  id           String   @id @default(uuid()) @db.Char(36)
+  role         RoleType
+  permissionId String   @db.Char(36)
+  createdAt    DateTime @default(now())
+
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([role, permissionId])
+  @@map("role_permissions")
+}
+
+model UserPermission {
+  id           String   @id @default(uuid()) @db.Char(36)
+  userId       String   @db.Char(36)
+  permissionId String   @db.Char(36)
+  isGranted    Boolean  @default(true)
+  grantedById  String?  @db.Char(36)
+  createdAt    DateTime @default(now())
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, permissionId])
+  @@map("user_permissions")
+}
+
+model Session {
+  id               String    @id @default(uuid()) @db.Char(36)
+  userId           String    @db.Char(36)
+  refreshTokenHash String    @unique @db.VarChar(128)
+  rolePanel        RoleType
+  ipAddress        String?   @db.VarChar(64)
+  userAgent        String?   @db.VarChar(255)
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  createdAt        DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@map("sessions")
+}
+
+// ----------------------------------------------------------------------------
+// 2. COURSES, MULTI-TEACHER ASSIGNMENTS & CURRICULUM (C-007, C-026)
+// ----------------------------------------------------------------------------
+
+model CourseCategory {
+  id          String   @id @default(uuid()) @db.Char(36)
+  name        String   @db.VarChar(120)
+  slug        String   @unique @db.VarChar(140)
+  description String?  @db.Text
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  courses Course[]
+
+  @@map("course_categories")
+}
+
+model Course {
+  id                   String       @id @default(uuid()) @db.Char(36)
+  categoryId           String       @db.Char(36)
+  code                 String       @unique @db.VarChar(32)
+  title                String       @db.VarChar(200)
+  slug                 String       @unique @db.VarChar(220)
+  shortDescription     String       @db.VarChar(500)
+  description          String       @db.Text
+  thumbnailUrl         String?      @db.VarChar(500)
+  level                String       @default("INTERMEDIATE") @db.VarChar(64)
+  language             String       @default("English") @db.VarChar(64)
+  basePrice            Decimal      @db.Decimal(12, 2)
+  currency             String       @default("INR") @db.Char(3)
+  status               CourseStatus @default(DRAFT)
+  minAttendancePercent Decimal      @default(75.00) @db.Decimal(5, 2)
+  minPassMarksPercent  Decimal      @default(50.00) @db.Decimal(5, 2)
+  publishedAt          DateTime?
+  createdById          String       @db.Char(36)
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+
+  category             CourseCategory            @relation(fields: [categoryId], references: [id])
+  teacherAssignments   CourseTeacherAssignment[]
+  sections             CourseSection[]
+  materials            CourseMaterial[]
+  paymentPlanTemplates PaymentPlanTemplate[]
+  enrollments          Enrollment[]
+  liveClasses          LiveClass[]
+  recordings           ClassRecording[]
+  attendanceSessions   AttendanceSession[]
+  assignments          Assignment[]
+  exams                Exam[]
+  certificates         Certificate[]
+
+  @@index([status, categoryId])
+  @@map("courses")
+}
+
+model CourseTeacherAssignment {
+  id                  String                @id @default(uuid()) @db.Char(36)
+  courseId            String                @db.Char(36)
+  teacherId           String                @db.Char(36)
+  assignmentRole      TeacherAssignmentRole @default(PRIMARY)
+  revenueSharePercent Decimal               @default(30.00) @db.Decimal(5, 2)
+  status              AssignmentStatus      @default(ACTIVE)
+  assignedAt          DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+
+  course  Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  teacher User   @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+
+  @@unique([courseId, teacherId])
+  @@index([teacherId, status])
+  @@map("course_teacher_assignments")
+}
+
+model CourseSection {
+  id          String   @id @default(uuid()) @db.Char(36)
+  courseId    String   @db.Char(36)
+  title       String   @db.VarChar(200)
+  description String?  @db.Text
+  sortOrder   Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  course  Course         @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  lessons CourseLesson[]
+
+  @@index([courseId, sortOrder])
+  @@map("course_sections")
+}
+
+model CourseLesson {
+  id              String   @id @default(uuid()) @db.Char(36)
+  sectionId       String   @db.Char(36)
+  title           String   @db.VarChar(200)
+  contentType     String   @db.VarChar(64)
+  durationSeconds Int      @default(0)
+  sortOrder       Int      @default(1)
+  isPreview       Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  section   CourseSection    @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  materials CourseMaterial[]
+
+  @@index([sectionId, sortOrder])
+  @@map("course_lessons")
+}
+
+model CourseMaterial {
+  id              String   @id @default(uuid()) @db.Char(36)
+  courseId        String   @db.Char(36)
+  lessonId        String?  @db.Char(36)
+  title           String   @db.VarChar(200)
+  description     String?  @db.Text
+  fileName        String   @db.VarChar(255)
+  mimeType        String   @db.VarChar(120)
+  sizeBytes       BigInt
+  storageProvider String   @default("LOCAL_VPS") @db.VarChar(32)
+  storageKey      String   @db.VarChar(500)
+  uploadedById    String   @db.Char(36)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  course Course        @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  lesson CourseLesson? @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+
+  @@index([courseId])
+  @@map("course_materials")
+}
+
+// ----------------------------------------------------------------------------
+// 3. ENROLLMENTS, INSTALLMENTS & PAYMENTS (C-009, C-014, C-027)
+// ----------------------------------------------------------------------------
+
+model PaymentPlanTemplate {
+  id               String          @id @default(uuid()) @db.Char(36)
+  courseId         String          @db.Char(36)
+  name             String          @db.VarChar(120)
+  planType         PaymentPlanType @default(FULL)
+  installmentCount Int             @default(1)
+  totalAmount      Decimal         @db.Decimal(12, 2)
+  currency         String          @default("INR") @db.Char(3)
+  gracePeriodDays  Int             @default(5)
+  isActive         Boolean         @default(true)
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  course      Course       @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  enrollments Enrollment[]
+
+  @@index([courseId, isActive])
+  @@map("payment_plan_templates")
+}
+
+model Enrollment {
+  id                     String           @id @default(uuid()) @db.Char(36)
+  studentId              String           @db.Char(36)
+  courseId               String           @db.Char(36)
+  paymentPlanTemplateId  String?          @db.Char(36)
+  planTypeSnapshot       PaymentPlanType  @default(FULL)
+  purchasedPriceSnapshot Decimal          @db.Decimal(12, 2)
+  currencySnapshot       String           @default("INR") @db.Char(3)
+  status                 EnrollmentStatus @default(PENDING_PAYMENT)
+  progressPercent        Decimal          @default(0.00) @db.Decimal(5, 2)
+  enrolledAt             DateTime         @default(now())
+  activatedAt            DateTime?
+  suspendedAt            DateTime?
+  completedAt            DateTime?
+  expiresAt              DateTime?
+  updatedAt              DateTime         @updatedAt
+
+  student             User                 @relation(fields: [studentId], references: [id])
+  course              Course               @relation(fields: [courseId], references: [id])
+  paymentPlanTemplate PaymentPlanTemplate? @relation(fields: [paymentPlanTemplateId], references: [id])
+  installments        Installment[]
+  paymentTransactions PaymentTransaction[]
+  certificate         Certificate?
+
+  @@index([studentId, status])
+  @@index([courseId, status])
+  @@map("enrollments")
+}
+
+model Installment {
+  id             String            @id @default(uuid()) @db.Char(36)
+  enrollmentId   String            @db.Char(36)
+  sequenceNumber Int
+  amount         Decimal           @db.Decimal(12, 2)
+  currency       String            @default("INR") @db.Char(3)
+  dueAt          DateTime
+  graceEndsAt    DateTime
+  status         InstallmentStatus @default(PENDING)
+  paidAt         DateTime?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  enrollment          Enrollment           @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  paymentTransactions PaymentTransaction[]
+
+  @@unique([enrollmentId, sequenceNumber])
+  @@index([status, dueAt])
+  @@map("installments")
+}
+
+model PaymentTransaction {
+  id                 String              @id @default(uuid()) @db.Char(36)
+  enrollmentId       String              @db.Char(36)
+  installmentId      String?             @db.Char(36)
+  studentId          String              @db.Char(36)
+  provider           PaymentProviderType @default(RAZORPAY)
+  providerOrderId    String?             @unique @db.VarChar(120)
+  providerPaymentId  String?             @unique @db.VarChar(120)
+  amount             Decimal             @db.Decimal(12, 2)
+  walletAmountUsed   Decimal             @default(0.00) @db.Decimal(12, 2)
+  currency           String              @default("INR") @db.Char(3)
+  status             PaymentStatus       @default(CREATED)
+  idempotencyKey     String              @unique @db.VarChar(120)
+  receiptNumber      String?             @unique @db.VarChar(64)
+  failureCode        String?             @db.VarChar(64)
+  failureMessageSafe String?             @db.VarChar(255)
+  verifiedAt         DateTime?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  enrollment  Enrollment   @relation(fields: [enrollmentId], references: [id])
+  installment Installment? @relation(fields: [installmentId], references: [id])
+  student     User         @relation(fields: [studentId], references: [id])
+
+  @@index([studentId, status])
+  @@index([enrollmentId])
+  @@map("payment_transactions")
+}
+
+model PaymentWebhookEvent {
+  id                String    @id @default(uuid()) @db.Char(36)
+  provider          String    @db.VarChar(32)
+  providerEventId   String    @db.VarChar(120)
+  eventType         String    @db.VarChar(120)
+  signatureVerified Boolean   @default(false)
+  payloadJson       String    @db.LongText
+  processingStatus  String    @default("RECEIVED") @db.VarChar(32)
+  processedAt       DateTime?
+  createdAt         DateTime  @default(now())
+
+  @@unique([provider, providerEventId])
+  @@map("payment_webhook_events")
+}
+
+// ----------------------------------------------------------------------------
+// 4. WALLET LEDGER, REFERRALS, REDEMPTIONS & TEACHER PAYOUTS (C-005, C-006, C-028, C-029)
+// ----------------------------------------------------------------------------
+
+model Wallet {
+  id               String   @id @default(uuid()) @db.Char(36)
+  userId           String   @unique @db.Char(36)
+  currency         String   @default("INR") @db.Char(3)
+  availableBalance Decimal  @default(0.00) @db.Decimal(12, 2)
+  reservedBalance  Decimal  @default(0.00) @db.Decimal(12, 2)
+  version          Int      @default(1)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions       WalletTransaction[]
+  redemptionRequests RedemptionRequest[]
+
+  @@map("wallets")
+}
+
+model WalletTransaction {
+  id              String                @id @default(uuid()) @db.Char(36)
+  walletId        String                @db.Char(36)
+  transactionType WalletTransactionType
+  direction       LedgerDirection
+  amount          Decimal               @db.Decimal(12, 2)
+  balanceAfter    Decimal               @db.Decimal(12, 2)
+  currency        String                @default("INR") @db.Char(3)
+  status          LedgerEntryStatus     @default(POSTED)
+  referenceType   String                @db.VarChar(64)
+  referenceId     String                @db.Char(36)
+  idempotencyKey  String                @unique @db.VarChar(120)
+  description     String                @db.VarChar(255)
+  createdById     String?               @db.Char(36)
+  createdAt       DateTime              @default(now())
+
+  wallet Wallet @relation(fields: [walletId], references: [id])
+
+  @@index([walletId, createdAt])
+  @@map("wallet_transactions")
+}
+
+model ReferralCode {
+  id        String   @id @default(uuid()) @db.Char(36)
+  userId    String   @unique @db.Char(36)
+  code      String   @unique @db.VarChar(32)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  referrals Referral[]
+
+  @@map("referral_codes")
+}
+
+model Referral {
+  id                     String         @id @default(uuid()) @db.Char(36)
+  referrerUserId         String         @db.Char(36)
+  referredUserId         String         @unique @db.Char(36)
+  referralCodeId         String         @db.Char(36)
+  status                 ReferralStatus @default(ATTRIBUTED)
+  rewardAmountSnapshot   Decimal        @db.Decimal(12, 2)
+  currency               String         @default("INR") @db.Char(3)
+  qualifyingEnrollmentId String?        @db.Char(36)
+  attributedAt           DateTime       @default(now())
+  qualifiedAt            DateTime?
+  rewardedAt             DateTime?
+
+  referrerUser User         @relation("ReferrerUser", fields: [referrerUserId], references: [id])
+  referredUser User         @relation("ReferredUser", fields: [referredUserId], references: [id])
+  referralCode ReferralCode @relation(fields: [referralCodeId], references: [id])
+
+  @@index([referrerUserId, status])
+  @@map("referrals")
+}
+
+model RedemptionRequest {
+  id                    String           @id @default(uuid()) @db.Char(36)
+  userId                String           @db.Char(36)
+  walletId              String           @db.Char(36)
+  amount                Decimal          @db.Decimal(12, 2)
+  currency              String           @default("INR") @db.Char(3)
+  upiIdMasked           String           @db.VarChar(64)
+  upiIdEncrypted        String           @db.VarChar(500)
+  status                RedemptionStatus @default(REQUESTED)
+  reserveTransactionId  String           @unique @db.Char(36)
+  reversalTransactionId String?          @unique @db.Char(36)
+  reviewedById          String?          @db.Char(36)
+  reviewedAt            DateTime?
+  payoutReference       String?          @db.VarChar(120)
+  rejectionReason       String?          @db.VarChar(255)
+  requestedAt           DateTime         @default(now())
+  paidAt                DateTime?
+  updatedAt             DateTime         @updatedAt
+
+  user     User   @relation("RedemptionRequester", fields: [userId], references: [id])
+  wallet   Wallet @relation(fields: [walletId], references: [id])
+  reviewer User?  @relation("RedemptionReviewer", fields: [reviewedById], references: [id])
+
+  @@index([userId, status])
+  @@index([status, requestedAt])
+  @@map("redemption_requests")
+}
+
+model TeacherPayout {
+  id                          String       @id @default(uuid()) @db.Char(36)
+  teacherId                   String       @db.Char(36)
+  courseId                    String?      @db.Char(36)
+  periodStart                 DateTime     @db.Date
+  periodEnd                   DateTime     @db.Date
+  grossCourseCollections      Decimal      @db.Decimal(12, 2)
+  revenueSharePercentSnapshot Decimal      @db.Decimal(5, 2)
+  grossPayoutAmount           Decimal      @db.Decimal(12, 2)
+  adjustments                 Decimal      @default(0.00) @db.Decimal(12, 2)
+  netPayoutAmount             Decimal      @db.Decimal(12, 2)
+  currency                    String       @default("INR") @db.Char(3)
+  status                      PayoutStatus @default(DRAFT)
+  approvedById                String?      @db.Char(36)
+  paidAt                      DateTime?
+  paymentReference            String?      @db.VarChar(120)
+  notes                       String?      @db.VarChar(255)
+  createdAt                   DateTime     @default(now())
+  updatedAt                   DateTime     @updatedAt
+
+  teacher  User  @relation("TeacherPayoutRecipient", fields: [teacherId], references: [id])
+  approver User? @relation("TeacherPayoutApprover", fields: [approvedById], references: [id])
+
+  @@index([teacherId, status])
+  @@map("teacher_payouts")
+}
+
+// ----------------------------------------------------------------------------
+// 5. LIVE CLASSES, YOUTUBE RECORDINGS & ATTENDANCE (C-004, C-008, C-022, C-030)
+// ----------------------------------------------------------------------------
+
+model LiveClass {
+  id               String          @id @default(uuid()) @db.Char(36)
+  courseId         String          @db.Char(36)
+  teacherId        String          @db.Char(36)
+  title            String          @db.VarChar(200)
+  description      String?         @db.Text
+  scheduledStartAt DateTime
+  scheduledEndAt   DateTime
+  provider         String          @default("HMS_100MS") @db.VarChar(32)
+  providerRoomId   String?         @db.VarChar(120)
+  status           LiveClassStatus @default(SCHEDULED)
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  course             Course                 @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  teacher            User                   @relation(fields: [teacherId], references: [id])
+  participants       LiveClassParticipant[]
+  recordings         ClassRecording[]
+  attendanceSessions AttendanceSession[]
+
+  @@index([courseId, scheduledStartAt])
+  @@index([teacherId, scheduledStartAt])
+  @@map("live_classes")
+}
+
+model LiveClassParticipant {
+  id              String    @id @default(uuid()) @db.Char(36)
+  liveClassId     String    @db.Char(36)
+  userId          String    @db.Char(36)
+  participantRole RoleType
+  joinedAt        DateTime  @default(now())
+  leftAt          DateTime?
+  durationSeconds Int       @default(0)
+
+  liveClass LiveClass @relation(fields: [liveClassId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([liveClassId, userId])
+  @@map("live_class_participants")
+}
+
+model ClassRecording {
+  id              String       @id @default(uuid()) @db.Char(36)
+  courseId        String       @db.Char(36)
+  liveClassId     String?      @db.Char(36)
+  title           String       @db.VarChar(200)
+  provider        String       @default("YOUTUBE") @db.VarChar(32)
+  youtubeVideoId  String       @db.VarChar(32)
+  durationSeconds Int          @default(0)
+  status          CourseStatus @default(PUBLISHED)
+  publishedAt     DateTime     @default(now())
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  course    Course     @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  liveClass LiveClass? @relation(fields: [liveClassId], references: [id], onDelete: SetNull)
+
+  @@index([courseId, status])
+  @@map("class_recordings")
+}
+
+model AttendanceSession {
+  id            String                  @id @default(uuid()) @db.Char(36)
+  courseId      String                  @db.Char(36)
+  liveClassId   String?                 @db.Char(36)
+  teacherId     String                  @db.Char(36)
+  sessionDate   DateTime                @db.Date
+  startsAt      DateTime
+  endsAt        DateTime
+  codeHash      String                  @db.VarChar(128)
+  codeExpiresAt DateTime
+  status        AttendanceSessionStatus @default(OPEN)
+  createdAt     DateTime                @default(now())
+  finalizedAt   DateTime?
+
+  course    Course             @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  liveClass LiveClass?         @relation(fields: [liveClassId], references: [id], onDelete: SetNull)
+  teacher   User               @relation(fields: [teacherId], references: [id])
+  records   AttendanceRecord[]
+
+  @@index([courseId, sessionDate])
+  @@map("attendance_sessions")
+}
+
+model AttendanceRecord {
+  id                  String               @id @default(uuid()) @db.Char(36)
+  attendanceSessionId String               @db.Char(36)
+  studentId           String               @db.Char(36)
+  status              AttendanceMarkStatus @default(PRESENT)
+  markedAt            DateTime             @default(now())
+  source              AttendanceSource     @default(CODE)
+  correctedById       String?              @db.Char(36)
+  correctionReason    String?              @db.VarChar(255)
+  updatedAt           DateTime             @updatedAt
+
+  attendanceSession AttendanceSession @relation(fields: [attendanceSessionId], references: [id], onDelete: Cascade)
+  student           User              @relation("StudentAttendance", fields: [studentId], references: [id])
+  correctedBy       User?             @relation("TeacherAttendanceCorrector", fields: [correctedById], references: [id])
+
+  @@unique([attendanceSessionId, studentId])
+  @@index([studentId, status])
+  @@map("attendance_records")
+}
+
+// ----------------------------------------------------------------------------
+// 6. ASSIGNMENTS, EXAMS, RESULTS & CERTIFICATES (C-007)
+// ----------------------------------------------------------------------------
+
+model Assignment {
+  id           String       @id @default(uuid()) @db.Char(36)
+  courseId     String       @db.Char(36)
+  title        String       @db.VarChar(200)
+  instructions String       @db.Text
+  maxMarks     Decimal      @db.Decimal(6, 2)
+  dueAt        DateTime
+  status       CourseStatus @default(PUBLISHED)
+  createdById  String       @db.Char(36)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  course      Course                 @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  submissions AssignmentSubmission[]
+
+  @@index([courseId, dueAt])
+  @@map("assignments")
+}
+
+model AssignmentSubmission {
+  id             String           @id @default(uuid()) @db.Char(36)
+  assignmentId   String           @db.Char(36)
+  studentId      String           @db.Char(36)
+  submissionText String?          @db.Text
+  fileStorageKey String?          @db.VarChar(500)
+  attemptNumber  Int              @default(1)
+  status         SubmissionStatus @default(SUBMITTED)
+  marksAwarded   Decimal?         @db.Decimal(6, 2)
+  feedback       String?          @db.Text
+  gradedById     String?          @db.Char(36)
+  submittedAt    DateTime         @default(now())
+  gradedAt       DateTime?
+
+  assignment Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  student    User       @relation("StudentSubmissions", fields: [studentId], references: [id])
+  gradedBy   User?      @relation("TeacherGradedSubmissions", fields: [gradedById], references: [id])
+
+  @@index([assignmentId, studentId])
+  @@index([status])
+  @@map("assignment_submissions")
+}
+
+model Exam {
+  id                 String       @id @default(uuid()) @db.Char(36)
+  courseId           String       @db.Char(36)
+  title              String       @db.VarChar(200)
+  instructions       String?      @db.Text
+  durationSeconds    Int          @default(3600)
+  totalMarks         Decimal      @db.Decimal(6, 2)
+  passMarks          Decimal      @db.Decimal(6, 2)
+  attemptLimit       Int          @default(1)
+  startsAt           DateTime
+  endsAt             DateTime
+  resultPublishAt    DateTime?
+  randomizeQuestions Boolean      @default(true)
+  status             CourseStatus @default(PUBLISHED)
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  course   Course        @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  attempts ExamAttempt[]
+
+  @@index([courseId, startsAt])
+  @@map("exams")
+}
+
+model ExamAttempt {
+  id            String            @id @default(uuid()) @db.Char(36)
+  examId        String            @db.Char(36)
+  studentId     String            @db.Char(36)
+  attemptNumber Int               @default(1)
+  status        ExamAttemptStatus @default(IN_PROGRESS)
+  score         Decimal?          @db.Decimal(6, 2)
+  grade         String?           @db.VarChar(16)
+  startedAt     DateTime          @default(now())
+  submittedAt   DateTime?
+  evaluatedAt   DateTime?
+
+  exam    Exam @relation(fields: [examId], references: [id], onDelete: Cascade)
+  student User @relation(fields: [studentId], references: [id])
+
+  @@unique([examId, studentId, attemptNumber])
+  @@map("exam_attempts")
+}
+
+model Certificate {
+  id                String            @id @default(uuid()) @db.Char(36)
+  studentId         String            @db.Char(36)
+  courseId          String            @db.Char(36)
+  enrollmentId      String            @unique @db.Char(36)
+  certificateNumber String            @unique @db.VarChar(64)
+  status            CertificateStatus @default(ISSUED)
+  fileReference     String?           @db.VarChar(500)
+  issuedAt          DateTime          @default(now())
+  revokedAt         DateTime?
+  revocationReason  String?           @db.VarChar(255)
+
+  student    User       @relation(fields: [studentId], references: [id])
+  course     Course     @relation(fields: [courseId], references: [id])
+  enrollment Enrollment @relation(fields: [enrollmentId], references: [id])
+
+  @@index([studentId])
+  @@map("certificates")
+}
+
+// ----------------------------------------------------------------------------
+// 7. SUPPORT TICKETS, NOTIFICATIONS & AUDIT LOGS
+// ----------------------------------------------------------------------------
+
+model SupportTicket {
+  id           String         @id @default(uuid()) @db.Char(36)
+  ticketNumber String         @unique @db.VarChar(32)
+  createdById  String         @db.Char(36)
+  assignedToId String?        @db.Char(36)
+  category     TicketCategory
+  priority     TicketPriority @default(MEDIUM)
+  status       TicketStatus   @default(INCOMING)
+  subject      String         @db.VarChar(200)
+  description  String         @db.Text
+  slaDueAt     DateTime
+  escalatedTo  String?        @db.VarChar(120)
+  resolvedAt   DateTime?
+  closedAt     DateTime?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  createdBy User                   @relation("TicketCreator", fields: [createdById], references: [id])
+  assignedTo User?                 @relation("TicketAssignee", fields: [assignedToId], references: [id])
+  messages  SupportTicketMessage[]
+
+  @@index([status, priority])
+  @@index([assignedToId, status])
+  @@map("support_tickets")
+}
+
+model SupportTicketMessage {
+  id             String   @id @default(uuid()) @db.Char(36)
+  ticketId       String   @db.Char(36)
+  senderId       String   @db.Char(36)
+  message        String   @db.Text
+  isInternalNote Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  ticket SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  sender User          @relation(fields: [senderId], references: [id])
+
+  @@index([ticketId, createdAt])
+  @@map("support_ticket_messages")
+}
+
+model Notification {
+  id              String              @id @default(uuid()) @db.Char(36)
+  recipientUserId String              @db.Char(36)
+  type            String              @db.VarChar(64)
+  title           String              @db.VarChar(200)
+  body            String              @db.Text
+  channel         NotificationChannel @default(IN_APP)
+  readAt          DateTime?
+  sentAt          DateTime            @default(now())
+
+  recipient User @relation(fields: [recipientUserId], references: [id], onDelete: Cascade)
+
+  @@index([recipientUserId, readAt])
+  @@map("notifications")
+}
+
+model AuditLog {
+  id             String   @id @default(uuid()) @db.Char(36)
+  actorUserId    String?  @db.Char(36)
+  action         String   @db.VarChar(120)
+  entityType     String   @db.VarChar(64)
+  entityId       String   @db.VarChar(64)
+  beforeDataJson String?  @db.LongText
+  afterDataJson  String?  @db.LongText
+  reason         String?  @db.VarChar(255)
+  ipAddress      String?  @db.VarChar(64)
+  requestId      String?  @db.VarChar(64)
+  createdAt      DateTime @default(now())
+
+  actor User? @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId])
+  @@index([actorUserId, createdAt])
+  @@map("audit_logs")
+}

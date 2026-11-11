@@ -1,0 +1,103 @@
+@import "tailwindcss";
+
+/* Bind Tailwind v4 `dark:*` variant to `.dark` and `[data-theme="dark"]` instead of OS prefers-color-scheme */
+@custom-variant dark (&:where(.dark, .dark *, [data-theme="dark"], [data-theme="dark"] *));
+
+@layer base {
+  body {
+    @apply antialiased selection:bg-violet-500 selection:text-white;
+  }
+}
+
+/* ==========================================================================
+   Deterministic Light Mode Surface, Border & Typography Overrides
+   Ensures all cards, inputs, tables, and inner panels switch cleanly in both
+   Tailwind v3 and Tailwind v4 regardless of OS system dark mode preference.
+   ========================================================================== */
+
+html.light,
+html[data-theme="light"] {
+  color-scheme: light;
+}
+
+html.dark,
+html[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+/* Force light card & input surfaces when Light Mode is active */
+html.light [class*="dark:bg-[#111827]"],
+html[data-theme="light"] [class*="dark:bg-[#111827]"],
+html.light [class*="dark:bg-[#131127]"],
+html[data-theme="light"] [class*="dark:bg-[#131127]"],
+html.light [class*="dark:bg-[#15132B]"],
+html[data-theme="light"] [class*="dark:bg-[#15132B]"] {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+}
+
+html.light [class*="dark:bg-[#181534]"],
+html[data-theme="light"] [class*="dark:bg-[#181534]"],
+html.light [class*="dark:bg-slate-900"],
+html[data-theme="light"] [class*="dark:bg-slate-900"] {
+  background-color: #f8fafc !important;
+  color: #0f172a !important;
+}
+
+html.light [class*="dark:bg-slate-950"],
+html[data-theme="light"] [class*="dark:bg-slate-950"] {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+}
+
+html.light [class*="dark:border-slate-800"],
+html[data-theme="light"] [class*="dark:border-slate-800"] {
+  border-color: #e2e8f0 !important;
+}
+
+html.light [class*="dark:border-slate-700"],
+html[data-theme="light"] [class*="dark:border-slate-700"] {
+  border-color: #cbd5e1 !important;
+}
+
+html.light [class*="dark:text-slate-300"],
+html[data-theme="light"] [class*="dark:text-slate-300"],
+html.light [class*="dark:text-slate-200"],
+html[data-theme="light"] [class*="dark:text-slate-200"] {
+  color: #334155 !important;
+}
+
+html.light [class*="dark:text-slate-400"],
+html[data-theme="light"] [class*="dark:text-slate-400"] {
+  color: #64748b !important;
+}
+
+/* Force dark card & input surfaces when Dark Mode is active */
+html.dark [class*="dark:bg-[#111827]"],
+html[data-theme="dark"] [class*="dark:bg-[#111827]"] {
+  background-color: #111827 !important;
+  color: #f8fafc !important;
+}
+
+html.dark [class*="dark:bg-[#131127]"],
+html[data-theme="dark"] [class*="dark:bg-[#131127]"] {
+  background-color: #131127 !important;
+  color: #f8fafc !important;
+}
+
+html.dark [class*="dark:bg-[#181534]"],
+html[data-theme="dark"] [class*="dark:bg-[#181534]"] {
+  background-color: #181534 !important;
+  color: #f8fafc !important;
+}
+
+html.dark [class*="dark:bg-slate-900"],
+html[data-theme="dark"] [class*="dark:bg-slate-900"] {
+  background-color: #0f172a !important;
+  color: #f8fafc !important;
+}
+
+html.dark [class*="dark:border-slate-800"],
+html[data-theme="dark"] [class*="dark:border-slate-800"] {
+  border-color: #1e293b !important;
+}
