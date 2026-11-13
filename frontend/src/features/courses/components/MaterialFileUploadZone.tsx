@@ -154,8 +154,7 @@ export function MaterialFileUploadZone({
     createMaterialMutation.mutate(
       {
         courseId,
-        payload: {
-          title: title.trim(),
+        title: title.trim(),
           description:
             description.trim() ||
             `Uploaded file: ${selectedFile.name} (${Math.max(1, Math.round(selectedFile.size / 1024))} KB)`,
@@ -163,7 +162,6 @@ export function MaterialFileUploadZone({
           mimeType,
           sizeBytes: Math.max(1, selectedFile.size),
           fileBase64,
-        },
       },
       {
         onSuccess: (res) => {

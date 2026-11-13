@@ -85,24 +85,18 @@ export function normalizeApiError(error: unknown): NormalizedApiError {
       errors: error.response?.data?.errors || null,
     };
   }
-  if (
-    error &&
-    typeof error === 'object' &&
-    'message' in error &&
-    typeof (error as { message?: unknown }).message === 'string'
-  ) {
-    return {
-      statusCode:
-        typeof (error as { statusCode?: unknown }).statusCode === 'number'
-          ? (error as { statusCode: number }).statusCode
-          : 500,
-      code:
-        typeof (error as { code?: unknown }).code === 'string'
-          ? (error as { code: string }).code
-          : 'CLIENT_ERROR',
-      message: (error as { message: string }).message,
-      errors: null,
-    };
+  if (error && typeof error === 'object') {
+    const errRecord = error as Record<string, unknown>;
+    if (typeof errRecord.message === 'string') {
+      return {
+        statusCode:
+          typeof errRecord.statusCode === 'number' ? errRecord.statusCode : 500,
+        code:
+          typeof errRecord.code === 'string' ? errRecord.code : 'CLIENT_ERROR',
+        message: errRecord.message,
+        errors: null,
+      };
+    }
   }
   return {
     statusCode: 500,
