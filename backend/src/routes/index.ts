@@ -5,7 +5,10 @@ import { dashboardsRouter } from '../modules/dashboards/dashboards.router';
 import { coursesRouter } from '../modules/courses/courses.router';
 import { enrollmentsRouter } from '../modules/enrollments/enrollments.router';
 import { materialsRouter } from '../modules/materials/materials.router';
-import { paymentsRouter } from '../modules/payments/payments.module';
+import {
+  paymentsRouter,
+  razorpayWebhooksRouter,
+} from '../modules/payments/payments.module';
 import { walletsRouter, referralsRouter } from '../modules/wallets/wallets.module';
 import { teacherPayoutsRouter } from '../modules/teacher-payouts/teacher-payouts.module';
 import { liveClassesRouter } from '../modules/live-classes/live-classes.module';
@@ -25,12 +28,13 @@ export const v1Router = Router();
 v1Router.get('/health', (_req, res) => {
   return apiResponse(res, 200, 'Online Learning Platform API is healthy', {
     status: 'OK',
-    phase: 'PHASE_7_ALL_PHASES_COMPLETE',
+    phase: 'PHASE_10_ENTERPRISE_READY',
     timestamp: new Date().toISOString(),
   });
 });
 
 v1Router.use('/auth', authRouter);
+v1Router.use('/webhooks', razorpayWebhooksRouter);
 v1Router.use('/users', usersRouter);
 v1Router.use('/dashboards', dashboardsRouter);
 v1Router.use('/courses', coursesRouter);

@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '@/lib/query-keys';
 import { assessmentsService } from '../services/assessments.service';
+import { ExamProctoringViolationEvent } from '../types/assessments.types';
 
 export function useAssignmentsQuery(filters?: Record<string, string | number>) {
   return useQuery({
@@ -88,16 +89,64 @@ export function useCreateExamMutation() {
   });
 }
 
+export function useSaveExamProgressMutation() {
+  return useMutation({
+    mutationFn: ({
+      examId,
+      answers,
+      remainingSeconds,
+      tabSwitchCount,
+      fullscreenExits,
+      copyPasteBlockedCount,
+      violations,
+    }: {
+      examId: string;
+      answers: Record<string, string>;
+      remainingSeconds?: number | null;
+      tabSwitchCount?: number;
+      fullscreenExits?: number;
+      copyPasteBlockedCount?: number;
+      violations?: ExamProctoringViolationEvent[];
+    }) =>
+      assessmentsService.saveExamProgress(examId, {
+        answers,
+        remainingSeconds,
+        tabSwitchCount,
+        fullscreenExits,
+        copyPasteBlockedCount,
+        violations,
+      }),
+  });
+}
+
 export function useSubmitExamAttemptMutation() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({
       examId,
       answers,
+      tabSwitchCount,
+      fullscreenExits,
+      copyPasteBlockedCount,
+      autoSubmittedByProctor,
+      violations,
     }: {
       examId: string;
       answers: Record<string, string>;
-    }) => assessmentsService.submitExamAttempt(examId, answers),
+      tabSwitchCount?: number;
+      fullscreenExits?: number;
+      copyPasteBlockedCount?: number;
+      autoSubmittedByProctor?: boolean;
+      violations?: ExamProctoringViolationEvent[];
+    }) =>
+      assessmentsService.submitExamAttempt(examId, {
+        answers,
+        tabSwitchCount,
+        fullscreenExits,
+        copyPasteBlockedCount,
+        autoSubmittedByProctor,
+        violations,
+      }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.assessments.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.dashboards.all });

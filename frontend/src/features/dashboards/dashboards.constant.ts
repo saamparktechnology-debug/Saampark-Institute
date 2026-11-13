@@ -2,7 +2,9 @@ import { RolePanelType } from '@/features/auth/types/auth.types';
 import { NavSection } from './types/dashboards.types';
 
 /**
- * Complete Full-Scope Sidebar Navigation for all 4 roles (100% of Phases 1–7 Live & Active).
+ * Role-Scoped Sidebar Navigation:
+ * - STUDENT uses a streamlined, distraction-free Udemy / Udacity learning navigation.
+ * - ADMIN, TEACHER, and SUPPORT retain their operational workspaces.
  */
 export const PANEL_SIDEBAR_NAVIGATION: Record<RolePanelType, NavSection[]> = {
   ADMIN: [
@@ -40,42 +42,30 @@ export const PANEL_SIDEBAR_NAVIGATION: Record<RolePanelType, NavSection[]> = {
   ],
   STUDENT: [
     {
-      heading: 'MAIN',
+      heading: 'MY LEARNING',
       items: [
         { label: 'Dashboard', key: 'dashboard', href: '/student/dashboard' },
-        { label: 'My Courses', key: 'my-courses', href: '/student/courses' },
-        { label: 'Course Details', key: 'course-details', href: '/student/courses' },
-      ],
-    },
-    {
-      heading: 'ACADEMICS',
-      items: [
+        { label: 'My Courses & Classroom', key: 'my-courses', href: '/student/courses' },
         { label: 'Live Classes', key: 'live-classes', href: '/student/live-classes' },
-        { label: 'Recorded Classes', key: 'recorded-classes', href: '/student/recorded-classes' },
-        { label: 'Learning Materials', key: 'materials', href: '/student/materials' },
+        { label: 'Recorded Videos', key: 'recorded-classes', href: '/student/recorded-classes' },
+        { label: 'Study Materials', key: 'materials', href: '/student/materials' },
+      ],
+    },
+    {
+      heading: 'PRACTICE & EXAMS',
+      items: [
         { label: 'Assignments', key: 'assignments', href: '/student/assignments' },
-        { label: 'Examinations', key: 'examinations', href: '/student/examinations' },
-        { label: 'Results', key: 'results', href: '/student/results' },
-        { label: 'My Performance', key: 'performance', href: '/student/performance' },
-        { label: 'Attendance', key: 'attendance', href: '/student/attendance' },
-      ],
-    },
-    {
-      heading: 'FINANCE',
-      items: [
-        { label: 'Payment History', key: 'payment-history', href: '/student/payment-history' },
-        { label: 'Installments & Dues', key: 'installments', href: '/student/enrollments' },
-        { label: 'Wallet', key: 'wallet', href: '/student/wallet' },
-        { label: 'Referral Program', key: 'referrals', href: '/student/referrals' },
-        { label: 'Redeem Wallet', key: 'redeem-wallet', href: '/student/redeem-wallet' },
-      ],
-    },
-    {
-      heading: 'OTHERS',
-      items: [
+        { label: 'Exams & Quizzes', key: 'examinations', href: '/student/examinations' },
+        { label: 'Attendance Check-In', key: 'attendance', href: '/student/attendance' },
         { label: 'Certificates', key: 'certificates', href: '/student/certificates' },
-        { label: 'Notifications', key: 'notifications', href: '/student/notifications' },
-        { label: 'Calendar', key: 'calendar', href: '/student/calendar' },
+      ],
+    },
+    {
+      heading: 'BILLING & ACCOUNT',
+      items: [
+        { label: 'Fees & Installments', key: 'installments', href: '/student/enrollments' },
+        { label: 'Invoices & Receipts', key: 'payment-history', href: '/student/payment-history' },
+        { label: 'Wallet & Referrals', key: 'wallet', href: '/student/wallet' },
         { label: 'Profile & Settings', key: 'profile', href: '/student/profile' },
         { label: 'Help & Support', key: 'support', href: '/student/support' },
       ],

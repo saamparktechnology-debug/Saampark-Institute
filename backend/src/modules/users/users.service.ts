@@ -1,36 +1,27 @@
-import crypto from "crypto";
-import bcrypt from "bcryptjs";
-import { AccountStatus, Prisma, RoleType } from "@prisma/client";
-import { prisma } from "../../config/prisma";
-import { AuthenticatedActor } from "../../types/express";
-import { ApiError } from "../../utils/ApiError";
-import {
-  buildPaginationMeta,
-  parsePaginationAndFilters,
-} from "../../utils/pagination";
-import { UserDirectoryItemDto } from "./users.types";
+import crypto from 'crypto';
+import bcrypt from 'bcryptjs';
+import { AccountStatus, Prisma, RoleType } from '@prisma/client';
+import { prisma } from '../../config/prisma';
+import { AuthenticatedActor } from '../../types/express';
+import { ApiError } from '../../utils/ApiError';
+import { buildPaginationMeta, parsePaginationAndFilters } from '../../utils/pagination';
+import { UserDirectoryItemDto } from './users.types';
 
 export class UsersService {
   /**
    * Lists users with allowlisted role/status filters for Admin User Management.
    */
-  static async listUsers(
-    actor: AuthenticatedActor,
-    rawQuery: Record<string, unknown>,
-  ) {
-    if (actor.role !== "ADMIN") {
-      throw ApiError.forbidden(
-        "Only administrators can view the platform user directory.",
-      );
+  static async listUsers(actor: AuthenticatedActor, rawQuery: Record<string, unknown>) {
+    if (actor.role !== 'ADMIN') {
+      throw ApiError.forbidden('Only administrators can view the platform user directory.');
     }
 
-    const { page, limit, skip, sortBy, sortOrder, filters } =
-      parsePaginationAndFilters(
-        rawQuery,
-        ["role", "status", "search"],
-        ["createdAt", "fullName", "email"],
-        "createdAt",
-      );
+    const { page, limit, skip, sortBy, sortOrder, filters } = parsePaginationAndFilters(
+      rawQuery,
+      ['role', 'status', 'search'],
+      ['createdAt', 'fullName', 'email'],
+      'createdAt'
+    );
 
     const where: Prisma.UserWhereInput = {};
     if (filters.role) {
@@ -89,19 +80,15 @@ export class UsersService {
   /**
    * Lists all ACTIVE teachers so Admin can select a teacher from a dropdown when assigning to a course.
    */
-  static async listActiveTeachers(
-    actor: AuthenticatedActor,
-  ): Promise<UserDirectoryItemDto[]> {
-    if (actor.role !== "ADMIN") {
-      throw ApiError.forbidden(
-        "Only administrators can list teachers for course assignment.",
-      );
+  static async listActiveTeachers(actor: AuthenticatedActor): Promise<UserDirectoryItemDto[]> {
+    if (actor.role !== 'ADMIN') {
+      throw ApiError.forbidden('Only administrators can list teachers for course assignment.');
     }
 
     const teachers = await prisma.user.findMany({
-      where: { role: "TEACHER", status: "ACTIVE" },
+      where: { role: 'TEACHER', status: 'ACTIVE' },
       include: { teacherProfile: true },
-      orderBy: { fullName: "asc" },
+      orderBy: { fullName: 'asc' },
     });
 
     return teachers.map((t) => ({
@@ -117,7 +104,7 @@ export class UsersService {
       specialization: t.teacherProfile?.specialization || null,
       defaultRevenueSharePercent: t.teacherProfile
         ? t.teacherProfile.defaultRevenueSharePercent.toFixed(2)
-        : "30.00",
+        : '30.00',
     }));
   }
 
@@ -135,12 +122,10 @@ export class UsersService {
       specialization?: string;
       defaultRevenueSharePercent?: number;
       department?: string;
-    },
+    }
   ): Promise<UserDirectoryItemDto> {
-    if (actor.role !== "ADMIN") {
-      throw ApiError.forbidden(
-        "Only administrators can provision user accounts.",
-      );
+    if (actor.role !== 'ADMIN') {
+      throw ApiError.forbidden('Only administrators can provision user accounts.');
     }
 
     const existing = await prisma.user.findUnique({
@@ -148,7 +133,7 @@ export class UsersService {
       select: { id: true },
     });
     if (existing) {
-      throw ApiError.conflict("A user with this email already exists.");
+      throw ApiError.conflict('A user with this email already exists.');
     }
 
     const passwordHash = await bcrypt.hash(payload.password, 12);
@@ -162,21 +147,21 @@ export class UsersService {
           passwordHash,
           fullName: payload.fullName,
           role: payload.role,
-          status: "ACTIVE",
-          ...(payload.role === "TEACHER"
+          status: 'ACTIVE',
+          ...(payload.role === 'TEACHER'
             ? {
                 teacherProfile: {
                   create: {
                     teacherCode: `TCH-${codeSuffix}`,
-                    specialization: payload.specialization || "General Faculty",
+                    specialization: payload.specialization || 'General Faculty',
                     defaultRevenueSharePercent: new Prisma.Decimal(
-                      (payload.defaultRevenueSharePercent ?? 30).toFixed(2),
+                      (payload.defaultRevenueSharePercent ?? 30).toFixed(2)
                     ),
                   },
                 },
               }
             : {}),
-          ...(payload.role === "STUDENT"
+          ...(payload.role === 'STUDENT'
             ? {
                 studentProfile: {
                   create: {
@@ -185,7 +170,7 @@ export class UsersService {
                 },
                 wallet: {
                   create: {
-                    currency: "INR",
+                    currency: 'INR',
                     availableBalance: 0,
                     reservedBalance: 0,
                   },
@@ -198,12 +183,12 @@ export class UsersService {
                 },
               }
             : {}),
-          ...(payload.role === "SUPPORT"
+          ...(payload.role === 'SUPPORT'
             ? {
                 supportAgentProfile: {
                   create: {
                     agentCode: `SUP-${codeSuffix}`,
-                    department: payload.department || "GENERAL",
+                    department: payload.department || 'GENERAL',
                   },
                 },
               }
@@ -219,8 +204,8 @@ export class UsersService {
       await tx.auditLog.create({
         data: {
           actorUserId: actor.id,
-          action: "USER_PROVISIONED_BY_ADMIN",
-          entityType: "User",
+          action: 'USER_PROVISIONED_BY_ADMIN',
+          entityType: 'User',
           entityId: user.id,
           afterDataJson: JSON.stringify({
             email: user.email,
@@ -252,37 +237,42 @@ export class UsersService {
     };
   }
 
+  /**
+   * Admin updates a user's account status and/or registered legal name (`fullName`).
+   */
   static async updateUserStatus(
     actor: AuthenticatedActor,
     userId: string,
-    status: AccountStatus,
+    status?: AccountStatus,
+    fullName?: string
   ) {
-    if (actor.role !== "ADMIN") {
-      throw ApiError.forbidden(
-        "Only administrators can update account status.",
-      );
+    if (actor.role !== 'ADMIN') {
+      throw ApiError.forbidden('Only administrators can update user status or legal name.');
+    }
+
+    const updateData: Prisma.UserUpdateInput = {};
+    if (status) updateData.status = status;
+    if (fullName && fullName.trim().length >= 2) {
+      updateData.fullName = fullName.trim();
     }
 
     return prisma.$transaction(async (tx) => {
       const updated = await tx.user.update({
         where: { id: userId },
-        data: { status },
-        select: {
-          id: true,
-          email: true,
-          fullName: true,
-          role: true,
-          status: true,
-        },
+        data: updateData,
+        select: { id: true, email: true, fullName: true, role: true, status: true },
       });
 
       await tx.auditLog.create({
         data: {
           actorUserId: actor.id,
-          action: "USER_STATUS_UPDATED",
-          entityType: "User",
+          action: fullName ? 'USER_NAME_OR_STATUS_UPDATED_BY_ADMIN' : 'USER_STATUS_UPDATED',
+          entityType: 'User',
           entityId: userId,
-          afterDataJson: JSON.stringify({ status }),
+          afterDataJson: JSON.stringify({
+            status: updated.status,
+            fullName: updated.fullName,
+          }),
         },
       });
 

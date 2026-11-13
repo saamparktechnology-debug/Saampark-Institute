@@ -116,6 +116,56 @@ export interface SupportResolutionReportData {
   }>;
 }
 
+export type OmnichannelEventType =
+  | 'ONBOARDING_WELCOME'
+  | 'LIVE_CLASS_SCHEDULED'
+  | 'STUDY_MATERIAL_UPLOADED'
+  | 'RECORDING_PUBLISHED'
+  | 'ASSIGNMENT_PUBLISHED'
+  | 'EXAM_PUBLISHED'
+  | 'INSTALLMENT_REMINDER'
+  | 'COURSE_ANNOUNCEMENT';
+
+export interface EventChannelToggle {
+  whatsapp: boolean;
+  email: boolean;
+  inApp: boolean;
+  smsDlt?: boolean;
+}
+
+export interface OmnichannelSettingsData {
+  whatsappEnabled: boolean;
+  emailEnabled: boolean;
+  inAppEnabled: boolean;
+  smsDltEnabled?: boolean;
+  whatsappBusinessNumber: string;
+  whatsappProvider: 'META_CLOUD_API' | 'TWILIO_WHATSAPP' | 'WATI_GATEWAY';
+  smtpSenderEmail: string;
+  smtpProvider: 'HOSTINGER_SMTP' | 'AWS_SES' | 'RESEND';
+  smsDltProvider?: 'MSG91_DLT' | 'FAST2SMS_DLT' | 'TEXTLOCAL_DLT' | 'TWILIO_SMS';
+  smsDltEntityId?: string;
+  smsDltSenderId?: string;
+  smsDltTemplateIdDefault?: string;
+  smsDltFallbackOnWhatsappFailure?: boolean;
+  eventToggles: Record<OmnichannelEventType, EventChannelToggle>;
+  updatedAt: string;
+  updatedBy: string;
+}
+
+export interface OmnichannelDeliveryLogItem {
+  id: string;
+  eventType: string;
+  courseCode: string | null;
+  title: string;
+  recipientCount: number;
+  channelsDispatched: Array<'WHATSAPP' | 'EMAIL' | 'IN_APP' | 'SMS_DLT'>;
+  skippedChannels: Array<'WHATSAPP' | 'EMAIL' | 'IN_APP' | 'SMS_DLT'>;
+  whatsappPreview: string | null;
+  smsDltPreview?: string | null;
+  actorName: string;
+  createdAt: string;
+}
+
 export interface NotificationItem {
   id: string;
   recipientUserId: string;
@@ -123,12 +173,19 @@ export interface NotificationItem {
   title: string;
   body: string;
   channel: 'IN_APP' | 'EMAIL' | 'SMS';
+  deliveryChannel?: 'WHATSAPP' | 'EMAIL' | 'IN_APP' | 'SMS' | 'SMS_DLT';
   readAt: string | null;
   sentAt: string;
 }
 
 export interface NotificationsData {
   unreadCount: number;
+  channelsStatus?: {
+    whatsappEnabled: boolean;
+    emailEnabled: boolean;
+    inAppEnabled: boolean;
+    smsDltEnabled?: boolean;
+  };
   items: NotificationItem[];
 }
 
@@ -160,6 +217,14 @@ export interface UserProfileDetailData {
     guardianName: string | null;
     guardianPhone: string | null;
     address: string | null;
+    pinCode?: string | null;
+    city?: string | null;
+    state?: string | null;
+    highestQualification?: string | null;
+    institutionOrCompany?: string | null;
+    graduationYear?: string | null;
+    careerGoal?: string | null;
+    referralSource?: string | null;
   } | null;
   teacherProfile: {
     teacherCode: string;

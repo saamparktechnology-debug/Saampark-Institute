@@ -14,6 +14,13 @@ import {
   useVpsReadinessQuery,
 } from '../hooks/system.hook';
 import {
+  useOmnichannelDeliveryLogsQuery,
+  useOmnichannelSettingsQuery,
+  useTestOmnichannelDispatchMutation,
+  useUpdateOmnichannelSettingsMutation,
+} from '@/features/operations/hooks/operations.hook';
+import { OmnichannelEventType } from '@/features/operations/types/operations.types';
+import {
   AUDIT_ENTITY_TYPES,
   EXPORTABLE_DATASETS,
 } from '../system.constant';
@@ -29,6 +36,12 @@ import {
   CheckCircle2,
   IndianRupee,
   RefreshCw,
+  MessageSquare,
+  Mail,
+  Bell,
+  Send,
+  Power,
+  Smartphone,
 } from 'lucide-react';
 
 const platformSettingsSchema = z.object({
@@ -44,6 +57,53 @@ const platformSettingsSchema = z.object({
   maintenanceMode: z.boolean().default(false),
 });
 type PlatformSettingsFormValues = z.infer<typeof platformSettingsSchema>;
+
+const OMNICHANNEL_EVENT_META: Array<{
+  key: OmnichannelEventType;
+  label: string;
+  description: string;
+}> = [
+  {
+    key: 'ONBOARDING_WELCOME',
+    label: 'Course Onboarding & 1st Installment Welcome',
+    description: 'Sent when a student activates course access or completes the 4-step onboarding checklist.',
+  },
+  {
+    key: 'LIVE_CLASS_SCHEDULED',
+    label: 'Live Class Scheduled / Room Ready',
+    description: 'Sent automatically to all enrolled students when a teacher schedules a 100ms live session.',
+  },
+  {
+    key: 'STUDY_MATERIAL_UPLOADED',
+    label: 'New Study Material Uploaded',
+    description: 'Sent automatically to the course cohort when new PDF notes, slides, or materials are uploaded.',
+  },
+  {
+    key: 'RECORDING_PUBLISHED',
+    label: 'Recorded Class Video Published',
+    description: 'Sent automatically when a new YouTube class recording is added to the course library.',
+  },
+  {
+    key: 'ASSIGNMENT_PUBLISHED',
+    label: 'New Course Assignment Posted',
+    description: 'Sent automatically when an instructor publishes a new graded assignment with a due date.',
+  },
+  {
+    key: 'EXAM_PUBLISHED',
+    label: 'New Examination Window Scheduled',
+    description: 'Sent automatically when a timed objective/subjective examination is scheduled.',
+  },
+  {
+    key: 'INSTALLMENT_REMINDER',
+    label: 'Upcoming / Overdue Fee Installment & Access Lock Reminder',
+    description: 'Sent when installment payment reminders or 00:00 IST grace-period access locks are triggered.',
+  },
+  {
+    key: 'COURSE_ANNOUNCEMENT',
+    label: 'Teacher / Admin Batch Announcement',
+    description: 'Sent when an instructor or administrator broadcasts a direct batch update or student nudge.',
+  },
+];
 
 function triggerBrowserDownload(exported: DatasetExportResult) {
   if (typeof window === 'undefined') return;
@@ -82,7 +142,6 @@ export function AdminReportsAndExportsView() {
       headerTitle="Financial, Academic & Operational Reports + CSV/JSON Exports"
     >
       <div className="space-y-6">
-        {/* Dataset Export Generator */}
         <div className="rounded-2xl border border-emerald-500/40 bg-white dark:bg-[#111827] p-6 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
@@ -173,7 +232,6 @@ export function AdminReportsAndExportsView() {
 
         {reports && (
           <>
-            {/* Financial & Academic Executive KPIs */}
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
               <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] p-5">
                 <p className="text-xs text-slate-500">Total Captured Revenue</p>
@@ -218,7 +276,6 @@ export function AdminReportsAndExportsView() {
               </div>
             </div>
 
-            {/* Course-by-Course Financial & Academic Breakdown */}
             <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] p-6">
               <h3 className="text-sm font-bold mb-4 flex items-center gap-2">
                 <BarChart3 className="w-4 h-4 text-cyan-400" /> Course-by-Course Revenue & Enrollment Breakdown
@@ -394,13 +451,23 @@ export function AdminAuditLogsExplorerView() {
 }
 
 // ============================================================================
-// 3. PLATFORM SETTINGS & HOSTINGER VPS READINESS VIEW (/admin/settings)
+// 3. PLATFORM SETTINGS, WHATSAPP/EMAIL/DLT-SMS TOGGLES & VPS READINESS (/admin/settings)
 // ============================================================================
 
 export function AdminPlatformSettingsView() {
   const { data: settings, isLoading } = usePlatformSettingsQuery();
   const { data: vpsHealth } = useVpsReadinessQuery();
   const updateMutation = useUpdatePlatformSettingsMutation();
+
+  const { data: omniSettings } = useOmnichannelSettingsQuery();
+  const updateOmniMutation = useUpdateOmnichannelSettingsMutation();
+  const { data: deliveryLogs = [] } = useOmnichannelDeliveryLogsQuery();
+  const testDispatchMutation = useTestOmnichannelDispatchMutation();
+
+  const [testEventType, setTestEventType] =
+    useState<OmnichannelEventType>('LIVE_CLASS_SCHEDULED');
+  const [dltEntityInput, setDltEntityInput] = useState<string>('');
+  const [dltSenderInput, setDltSenderInput] = useState<string>('');
 
   const form = useForm<PlatformSettingsFormValues>({
     resolver: zodResolver(platformSettingsSchema),
@@ -424,10 +491,392 @@ export function AdminPlatformSettingsView() {
     <RolePanelShell
       role="ADMIN"
       operatorName="Platform Configuration"
-      operatorSubtitle="Single-Institute Operational Thresholds"
-      headerTitle="Platform Settings & Hostinger VPS Production Readiness"
+      operatorSubtitle="WhatsApp, Email, DLT SMS & Operational Thresholds"
+      headerTitle="Platform Settings, WhatsApp/Email/DLT-SMS Automation & VPS Readiness"
     >
       <div className="space-y-6">
+        {/* OMNICHANNEL WHATSAPP, EMAIL & DLT SMS NOTIFICATION CONTROL CENTER */}
+        <div className="rounded-2xl border border-emerald-500/40 bg-white dark:bg-[#111827] p-6 space-y-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-bold flex items-center gap-2">
+                <MessageSquare className="w-4 h-4 text-emerald-400" /> Omnichannel Email, WhatsApp & DLT SMS Control Center (`GET/PATCH /api/v1/notifications/settings`)
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Turn WhatsApp, Email, DLT Transactional SMS (kept OFF while DLT registration is pending), and In-App notifications ON or OFF globally or per course event.
+              </p>
+            </div>
+
+            {omniSettings && (
+              <span className="text-[11px] text-slate-400 font-mono">
+                Updated by {omniSettings.updatedBy}
+              </span>
+            )}
+          </div>
+
+          {omniSettings && (
+            <>
+              {/* Master Channel ON/OFF Switches (4 Channels: WhatsApp, Email, DLT SMS, In-App) */}
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                {/* Master WhatsApp Switch */}
+                <div
+                  className={`p-4 rounded-2xl border flex items-center justify-between gap-3 ${
+                    omniSettings.whatsappEnabled
+                      ? 'border-emerald-500/50 bg-emerald-500/10'
+                      : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900'
+                  }`}
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <MessageSquare className="w-4 h-4 text-emerald-400" />
+                      <span className="text-xs font-bold">WhatsApp Alerts</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      <code className="font-mono">{omniSettings.whatsappBusinessNumber}</code> ({omniSettings.whatsappProvider})
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={updateOmniMutation.isPending}
+                    onClick={() =>
+                      updateOmniMutation.mutate({
+                        whatsappEnabled: !omniSettings.whatsappEnabled,
+                      })
+                    }
+                    className={`px-3 py-2 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition cursor-pointer ${
+                      omniSettings.whatsappEnabled
+                        ? 'bg-emerald-500 text-slate-950 shadow-md'
+                        : 'bg-rose-500/20 text-rose-400 border border-rose-500/40'
+                    }`}
+                  >
+                    <Power className="w-3.5 h-3.5" />
+                    {omniSettings.whatsappEnabled ? 'ON' : 'OFF'}
+                  </button>
+                </div>
+
+                {/* Master Email Switch */}
+                <div
+                  className={`p-4 rounded-2xl border flex items-center justify-between gap-3 ${
+                    omniSettings.emailEnabled
+                      ? 'border-cyan-500/50 bg-cyan-500/10'
+                      : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900'
+                  }`}
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <Mail className="w-4 h-4 text-cyan-400" />
+                      <span className="text-xs font-bold">Email (SMTP/Resend)</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      <code className="font-mono">{omniSettings.smtpSenderEmail}</code> ({omniSettings.smtpProvider})
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={updateOmniMutation.isPending}
+                    onClick={() =>
+                      updateOmniMutation.mutate({
+                        emailEnabled: !omniSettings.emailEnabled,
+                      })
+                    }
+                    className={`px-3 py-2 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition cursor-pointer ${
+                      omniSettings.emailEnabled
+                        ? 'bg-cyan-500 text-slate-950 shadow-md'
+                        : 'bg-rose-500/20 text-rose-400 border border-rose-500/40'
+                    }`}
+                  >
+                    <Power className="w-3.5 h-3.5" />
+                    {omniSettings.emailEnabled ? 'ON' : 'OFF'}
+                  </button>
+                </div>
+
+                {/* Master DLT SMS Fallback Switch (OFF by default while DLT registration is pending) */}
+                <div
+                  className={`p-4 rounded-2xl border flex items-center justify-between gap-3 ${
+                    omniSettings.smsDltEnabled
+                      ? 'border-amber-500/50 bg-amber-500/10'
+                      : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900'
+                  }`}
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <Smartphone className="w-4 h-4 text-amber-400" />
+                      <span className="text-xs font-bold">DLT SMS Fallback</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      Header: <code className="font-mono">{omniSettings.smsDltSenderId || 'SAAMPK'}</code>{' '}
+                      {omniSettings.smsDltEnabled ? '(DLT Active)' : '(DLT Pending — OFF)'}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={updateOmniMutation.isPending}
+                    onClick={() =>
+                      updateOmniMutation.mutate({
+                        smsDltEnabled: !omniSettings.smsDltEnabled,
+                      })
+                    }
+                    className={`px-3 py-2 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition cursor-pointer ${
+                      omniSettings.smsDltEnabled
+                        ? 'bg-amber-500 text-slate-950 shadow-md'
+                        : 'bg-slate-500/20 text-slate-400 border border-slate-500/40'
+                    }`}
+                  >
+                    <Power className="w-3.5 h-3.5" />
+                    {omniSettings.smsDltEnabled ? 'DLT: ON' : 'DLT: OFF'}
+                  </button>
+                </div>
+
+                {/* Master In-App Switch */}
+                <div
+                  className={`p-4 rounded-2xl border flex items-center justify-between gap-3 ${
+                    omniSettings.inAppEnabled
+                      ? 'border-violet-500/50 bg-violet-500/10'
+                      : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900'
+                  }`}
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <Bell className="w-4 h-4 text-violet-400" />
+                      <span className="text-xs font-bold">In-App Bell Alerts</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      Real-time role panel inbox & bell badge
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={updateOmniMutation.isPending}
+                    onClick={() =>
+                      updateOmniMutation.mutate({
+                        inAppEnabled: !omniSettings.inAppEnabled,
+                      })
+                    }
+                    className={`px-3 py-2 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition cursor-pointer ${
+                      omniSettings.inAppEnabled
+                        ? 'bg-violet-500 text-white shadow-md'
+                        : 'bg-rose-500/20 text-rose-400 border border-rose-500/40'
+                    }`}
+                  >
+                    <Power className="w-3.5 h-3.5" />
+                    {omniSettings.inAppEnabled ? 'ON' : 'OFF'}
+                  </button>
+                </div>
+              </div>
+
+              {/* DLT Entity ID & Sender Header Quick Configuration */}
+              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
+                <div>
+                  <span className="font-bold text-amber-400">
+                    TRAI DLT SMS Gateway Configuration ({omniSettings.smsDltProvider || 'MSG91_DLT'})
+                  </span>
+                  <p className="text-[11px] text-slate-500">
+                    While your DLT Entity/Template registration is pending, keep the DLT SMS Master Toggle above set to <strong>DLT: OFF</strong>. Once approved, enter your Entity ID & Sender Header and switch to <strong>DLT: ON</strong>.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    type="text"
+                    placeholder={omniSettings.smsDltEntityId || 'DLT PE_ID (19 digits)'}
+                    value={dltEntityInput}
+                    onChange={(e) => setDltEntityInput(e.target.value)}
+                    className="px-3 py-1.5 rounded-lg bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 font-mono text-[11px]"
+                  />
+                  <input
+                    type="text"
+                    maxLength={6}
+                    placeholder={omniSettings.smsDltSenderId || 'SAAMPK'}
+                    value={dltSenderInput}
+                    onChange={(e) => setDltSenderInput(e.target.value.toUpperCase())}
+                    className="w-24 px-3 py-1.5 rounded-lg bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 font-mono text-[11px]"
+                  />
+                  <button
+                    type="button"
+                    disabled={updateOmniMutation.isPending}
+                    onClick={() =>
+                      updateOmniMutation.mutate({
+                        smsDltEntityId: dltEntityInput || omniSettings.smsDltEntityId,
+                        smsDltSenderId: dltSenderInput || omniSettings.smsDltSenderId,
+                      })
+                    }
+                    className="px-3 py-1.5 rounded-lg bg-amber-500 text-slate-950 font-bold text-[11px] cursor-pointer"
+                  >
+                    Save DLT Metadata
+                  </button>
+                </div>
+              </div>
+
+              {/* Granular Per-Event Toggle Matrix */}
+              <div className="overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-2xl">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/70 text-slate-500">
+                      <th className="py-2.5 px-4">Automated LMS Event Trigger</th>
+                      <th className="py-2.5 px-4">Description</th>
+                      <th className="py-2.5 px-4 text-center">WhatsApp</th>
+                      <th className="py-2.5 px-4 text-center">Email</th>
+                      <th className="py-2.5 px-4 text-center">DLT SMS</th>
+                      <th className="py-2.5 px-4 text-center">In-App</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200/60 dark:divide-slate-800">
+                    {OMNICHANNEL_EVENT_META.map((ev) => {
+                      const currentToggle = omniSettings.eventToggles[ev.key] || {
+                        whatsapp: true,
+                        email: true,
+                        inApp: true,
+                        smsDlt: true,
+                      };
+                      return (
+                        <tr key={ev.key}>
+                          <td className="py-3 px-4 font-bold">
+                            <span className="font-mono text-[10px] text-cyan-400 block">
+                              {ev.key}
+                            </span>
+                            {ev.label}
+                          </td>
+                          <td className="py-3 px-4 text-slate-500 max-w-md">
+                            {ev.description}
+                          </td>
+                          {(['whatsapp', 'email', 'smsDlt', 'inApp'] as const).map((chKey) => {
+                            const isOn =
+                              chKey === 'smsDlt'
+                                ? Boolean(currentToggle.smsDlt ?? true)
+                                : Boolean(currentToggle[chKey]);
+                            const masterOn =
+                              chKey === 'whatsapp'
+                                ? omniSettings.whatsappEnabled
+                                : chKey === 'email'
+                                ? omniSettings.emailEnabled
+                                : chKey === 'smsDlt'
+                                ? Boolean(omniSettings.smsDltEnabled)
+                                : omniSettings.inAppEnabled;
+                            return (
+                              <td key={chKey} className="py-3 px-4 text-center">
+                                <button
+                                  type="button"
+                                  disabled={updateOmniMutation.isPending}
+                                  onClick={() =>
+                                    updateOmniMutation.mutate({
+                                      eventToggles: {
+                                        ...omniSettings.eventToggles,
+                                        [ev.key]: {
+                                          ...currentToggle,
+                                          [chKey]: !isOn,
+                                        },
+                                      },
+                                    })
+                                  }
+                                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition cursor-pointer ${
+                                    isOn && masterOn
+                                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                                      : isOn && !masterOn
+                                      ? 'bg-amber-500/15 text-amber-400 border border-amber-500/30'
+                                      : 'bg-slate-500/15 text-slate-400 border border-slate-500/30'
+                                  }`}
+                                >
+                                  {isOn ? (masterOn ? 'ON' : 'ON (Master OFF)') : 'OFF'}
+                                </button>
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* 1-Click Test Dispatch & Live Delivery Log */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 pt-2">
+                <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-3">
+                  <h3 className="text-xs font-bold flex items-center gap-1.5">
+                    <Send className="w-3.5 h-3.5 text-emerald-400" /> Test WhatsApp, Email & DLT SMS Dispatch
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Fires a real verification event through `OmnichannelMessagingService` using your active ON/OFF switches above.
+                  </p>
+                  <select
+                    value={testEventType}
+                    onChange={(e) => setTestEventType(e.target.value as OmnichannelEventType)}
+                    className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700"
+                  >
+                    {OMNICHANNEL_EVENT_META.map((ev) => (
+                      <option key={ev.key} value={ev.key}>
+                        {ev.label}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    disabled={testDispatchMutation.isPending}
+                    onClick={() =>
+                      testDispatchMutation.mutate({
+                        eventType: testEventType,
+                      })
+                    }
+                    className="w-full py-2 px-4 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-emerald-500 to-cyan-500 cursor-pointer"
+                  >
+                    {testDispatchMutation.isPending
+                      ? 'Dispatching Test Alert...'
+                      : 'Send Test Alert Now'}
+                  </button>
+                </div>
+
+                <div className="lg:col-span-2 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-2.5">
+                  <h3 className="text-xs font-bold">
+                    Recent Omnichannel Delivery Logs (`GET /api/v1/notifications/delivery-logs`)
+                  </h3>
+                  <div className="space-y-2 max-h-48 overflow-y-auto pr-1 text-xs">
+                    {deliveryLogs.length === 0 ? (
+                      <p className="text-slate-500 py-4 text-center">
+                        No omnichannel dispatches recorded yet. Click &quot;Send Test Alert Now&quot; or upload a course material/live class.
+                      </p>
+                    ) : (
+                      deliveryLogs.map((log) => (
+                        <div
+                          key={log.id}
+                          className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2"
+                        >
+                          <div>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="font-mono text-[10px] font-bold text-cyan-400">
+                                {log.eventType}
+                              </span>
+                              {log.courseCode && (
+                                <span className="px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-400 text-[10px] font-mono">
+                                  {log.courseCode}
+                                </span>
+                              )}
+                              <span className="font-bold">{log.title}</span>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-1.5 mt-1 text-[10px]">
+                              <span className="text-emerald-400 font-semibold">
+                                Sent: {log.channelsDispatched.join(', ') || 'NONE'}
+                              </span>
+                              {log.skippedChannels.length > 0 && (
+                                <span className="text-rose-400">
+                                  • Skipped (Toggle OFF): {log.skippedChannels.join(', ')}
+                                </span>
+                              )}
+                              <span className="text-slate-400">
+                                • {log.recipientCount} recipient(s)
+                              </span>
+                            </div>
+                          </div>
+                          <span className="font-mono text-[10px] text-slate-400">
+                            {new Date(log.createdAt).toLocaleTimeString()}
+                          </span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
         {/* Hostinger VPS Live Telemetry Card */}
         {vpsHealth && (
           <div className="rounded-2xl border border-emerald-500/40 bg-white dark:bg-[#111827] p-6 space-y-4">

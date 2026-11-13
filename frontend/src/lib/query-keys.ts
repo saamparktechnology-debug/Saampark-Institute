@@ -23,6 +23,7 @@ export const queryKeys = {
       [...queryKeys.courses.all, 'list', filters ?? {}] as const,
     detail: (courseId: string) => [...queryKeys.courses.all, 'detail', courseId] as const,
     materials: (courseId: string) => [...queryKeys.courses.all, 'materials', courseId] as const,
+    teacherStudents: () => [...queryKeys.courses.all, 'teacher-students'] as const,
   },
   enrollments: {
     all: ['enrollments'] as const,
@@ -71,6 +72,8 @@ export const queryKeys = {
     supportContextLookup: () => [...queryKeys.operations.all, 'support-context-lookup'] as const,
     supportReports: () => [...queryKeys.operations.all, 'support-reports'] as const,
     notifications: () => [...queryKeys.operations.all, 'notifications'] as const,
+    omnichannelSettings: () => [...queryKeys.operations.all, 'omnichannel-settings'] as const,
+    deliveryLogs: () => [...queryKeys.operations.all, 'delivery-logs'] as const,
     calendarEvents: () => [...queryKeys.operations.all, 'calendar-events'] as const,
     profile: () => [...queryKeys.operations.all, 'profile'] as const,
     rbacMatrix: () => [...queryKeys.operations.all, 'rbac-matrix'] as const,

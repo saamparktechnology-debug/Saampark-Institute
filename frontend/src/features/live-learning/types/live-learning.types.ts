@@ -20,10 +20,17 @@ export interface LiveClassItem {
 export interface LiveRoomJoinTicket {
   liveClassId: string;
   courseTitle: string;
+  courseCode?: string;
   title: string;
-  provider: 'HMS_100MS';
+  provider: 'JITSI_MEET' | 'YOUTUBE_LIVE' | 'HMS_100MS';
   providerRoomId: string;
+  jitsiDomain?: string;
+  jitsiRoomName?: string;
+  embedUrl?: string;
+  youtubeEmbedUrl?: string | null;
   roomRole: 'host' | 'co-host' | 'guest-student';
+  participantDisplayName?: string;
+  participantEmail?: string;
   token: string;
   expiresAt: string;
   participantId: string;
@@ -41,6 +48,14 @@ export interface LiveClassParticipantItem {
   durationSeconds: number;
 }
 
+export interface RecordingWatchProgressDto {
+  lastPositionSeconds: number;
+  watchedSeconds: number;
+  completionPercent: number;
+  completed: boolean;
+  updatedAt: string;
+}
+
 export interface ClassRecordingItem {
   id: string;
   courseId: string;
@@ -56,6 +71,18 @@ export interface ClassRecordingItem {
   status: 'DRAFT' | 'REVIEW' | 'PUBLISHED' | 'ARCHIVED';
   publishedAt: string;
   createdAt: string;
+  watermarkMeta?: {
+    studentFullName: string;
+    studentEmail: string;
+    studentPhone: string;
+    watermarkText: string;
+  };
+  myWatchProgress?: RecordingWatchProgressDto | null;
+  watchAnalytics?: {
+    uniqueViewersCount: number;
+    completedViewersCount: number;
+    averageCompletionPercent: number;
+  };
 }
 
 export interface AttendanceRecordItem {
@@ -109,4 +136,18 @@ export interface GeneratedAttendanceCodeResult {
   codeExpiresAt: string;
   expiryMinutes: number;
   status: 'OPEN' | 'CLOSED' | 'FINALIZED';
+}
+
+export interface LowAttendanceAlertDispatchResult {
+  alertedStudentsCount: number;
+  alertedStudents: Array<{
+    studentId: string;
+    studentName: string;
+    studentEmail: string;
+    courseCode: string;
+    attendancePercent: number;
+    minAttendancePercent: number;
+    consecutiveClassesNeededToRecover: number;
+  }>;
+  dispatchedAt: string;
 }

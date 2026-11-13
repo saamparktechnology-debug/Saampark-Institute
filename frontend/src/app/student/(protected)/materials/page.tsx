@@ -1,5 +1,5 @@
-import { StudentCoursesCatalogView } from '@/features/courses';
+import { StudentMaterialsVaultView } from '@/features/courses';
 
 export default function StudentMaterialsPage() {
-  return <StudentCoursesCatalogView />;
+  return <StudentMaterialsVaultView />;
 }

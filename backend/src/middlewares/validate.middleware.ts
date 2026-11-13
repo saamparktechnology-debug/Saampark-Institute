@@ -1,6 +1,6 @@
-import { Request, Response, NextFunction, RequestHandler } from "express";
-import { AnyZodObject, ZodError } from "zod";
-import { ApiError } from "../utils/ApiError";
+import { Request, Response, NextFunction, RequestHandler } from 'express';
+import { AnyZodObject, ZodError } from 'zod';
+import { ApiError } from '../utils/ApiError';
 
 export interface RequestSchema {
   body?: AnyZodObject;
@@ -23,20 +23,17 @@ export function validateRequest(schema: RequestSchema): RequestHandler {
       return next();
     } catch (error) {
       if (error instanceof ZodError) {
-        const formattedErrors = error.errors.reduce<Record<string, string>>(
-          (acc, issue) => {
-            const path = issue.path.join(".") || "request";
-            acc[path] = issue.message;
-            return acc;
-          },
-          {},
-        );
+        const formattedErrors = error.errors.reduce<Record<string, string>>((acc, issue) => {
+          const path = issue.path.join('.') || 'request';
+          acc[path] = issue.message;
+          return acc;
+        }, {});
         return next(
           ApiError.badRequest(
-            "Request validation failed",
-            "VALIDATION_ERROR",
-            formattedErrors,
-          ),
+            'Request validation failed',
+            'VALIDATION_ERROR',
+            formattedErrors
+          )
         );
       }
       return next(error);

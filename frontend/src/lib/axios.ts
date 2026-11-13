@@ -13,7 +13,7 @@ export interface NormalizedApiError {
 export const apiClient = axios.create({
   baseURL: API_BASE_URL,
   withCredentials: true,
-  timeout: 15000,
+  timeout: 60000,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -85,10 +85,33 @@ export function normalizeApiError(error: unknown): NormalizedApiError {
       errors: error.response?.data?.errors || null,
     };
   }
+  if (
+    error &&
+    typeof error === 'object' &&
+    'message' in error &&
+    typeof (error as { message?: unknown }).message === 'string'
+  ) {
+    return {
+      statusCode:
+        typeof (error as { statusCode?: unknown }).statusCode === 'number'
+          ? (error as { statusCode: number }).statusCode
+          : 500,
+      code:
+        typeof (error as { code?: unknown }).code === 'string'
+          ? (error as { code: string }).code
+          : 'CLIENT_ERROR',
+      message: (error as { message: string }).message,
+      errors: null,
+    };
+  }
   return {
     statusCode: 500,
     code: 'UNKNOWN_CLIENT_ERROR',
     message: error instanceof Error ? error.message : 'Unexpected error occurred',
     errors: null,
   };
+}
+
+export function extractErrorMessage(error: unknown): string {
+  return normalizeApiError(error).message;
 }

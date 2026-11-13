@@ -1,5 +1,6 @@
 import {
   CourseStatus,
+  EnrollmentStatus,
   PaymentPlanType,
   TeacherAssignmentRole,
   AssignmentStatus,
@@ -43,6 +44,7 @@ export interface CourseLessonDto {
   durationSeconds: number;
   sortOrder: number;
   isPreview: boolean;
+  isCompleted?: boolean;
 }
 
 export interface CourseSectionDto {
@@ -79,4 +81,56 @@ export interface CourseSummaryDto {
   paymentPlanTemplates: PaymentPlanTemplateDto[];
   sections?: CourseSectionDto[];
   enrollmentCount: number;
+  completedLessonIds?: string[];
+  studentProgressPercent?: string;
+}
+
+export interface CourseLessonProgressDto {
+  courseId: string;
+  enrollmentId: string;
+  completedLessonIds: string[];
+  completedCount: number;
+  totalLessons: number;
+  progressPercent: string;
+}
+
+export interface TeacherCohortStudentDto {
+  enrollmentId: string;
+  studentId: string;
+  studentName: string;
+  studentEmail: string;
+  studentPhone: string | null;
+  studentCode: string | null;
+  courseId: string;
+  courseCode: string;
+  courseTitle: string;
+  enrollmentStatus: EnrollmentStatus;
+  progressPercent: string;
+  paidInstallmentsCount: number;
+  totalInstallmentsCount: number;
+  onboardingCompleted: boolean;
+  enrolledAt: string;
+}
+
+export interface CourseDoubtReplyDto {
+  id: string;
+  doubtId: string;
+  senderId: string;
+  senderName: string;
+  senderRole: 'ADMIN' | 'STUDENT' | 'TEACHER' | 'SUPPORT';
+  message: string;
+  createdAt: string;
+}
+
+export interface CourseDoubtThreadDto {
+  id: string;
+  courseId: string;
+  lessonTitle: string | null;
+  subject: string;
+  question: string;
+  studentId: string;
+  studentName: string;
+  status: 'OPEN' | 'RESOLVED';
+  createdAt: string;
+  replies: CourseDoubtReplyDto[];
 }

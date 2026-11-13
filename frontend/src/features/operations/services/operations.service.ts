@@ -3,6 +3,9 @@ import { ApiEnvelope } from '@/features/auth/types/auth.types';
 import {
   CalendarEventItem,
   NotificationsData,
+  OmnichannelDeliveryLogItem,
+  OmnichannelEventType,
+  OmnichannelSettingsData,
   RbacPermissionItem,
   SupportAgentItem,
   SupportContextLookupData,
@@ -15,8 +18,8 @@ import {
 } from '../types/operations.types';
 
 /**
- * 100% API-driven service for Phase 6 Support Ticket Queues, SLA Monitoring,
- * Notifications, Unified Calendar, Profile & Settings, and Admin RBAC Matrix.
+ * 100% API-driven service for Support Ticket Queues, SLA Monitoring,
+ * Omnichannel (Email + WhatsApp + In-App) Notifications, Unified Calendar, Profile & RBAC Matrix.
  */
 export const operationsService = {
   // 1. Support Tickets & Triage
@@ -81,7 +84,7 @@ export const operationsService = {
     return res.data.data;
   },
 
-  // 2. Notifications
+  // 2. Notifications & Omnichannel (Email + WhatsApp + In-App) Controls
   async listNotifications(): Promise<NotificationsData> {
     const res = await apiClient.get<ApiEnvelope<NotificationsData>>('/notifications');
     return res.data.data;
@@ -91,7 +94,7 @@ export const operationsService = {
     targetRole?: 'ADMIN' | 'STUDENT' | 'TEACHER' | 'SUPPORT';
     title: string;
     body: string;
-    channel: 'IN_APP' | 'EMAIL' | 'SMS';
+    channel: 'IN_APP' | 'EMAIL' | 'SMS' | 'WHATSAPP';
   }) {
     const res = await apiClient.post<ApiEnvelope<unknown>>('/notifications', payload);
     return res.data.data;
@@ -109,6 +112,57 @@ export const operationsService = {
     return res.data.data;
   },
 
+  async getOmnichannelSettings(): Promise<OmnichannelSettingsData> {
+    const res = await apiClient.get<ApiEnvelope<OmnichannelSettingsData>>(
+      '/notifications/settings'
+    );
+    return res.data.data;
+  },
+
+  async updateOmnichannelSettings(
+    payload: Partial<Omit<OmnichannelSettingsData, 'updatedAt' | 'updatedBy'>>
+  ): Promise<OmnichannelSettingsData> {
+    const res = await apiClient.patch<ApiEnvelope<OmnichannelSettingsData>>(
+      '/notifications/settings',
+      payload
+    );
+    return res.data.data;
+  },
+
+  async listOmnichannelDeliveryLogs(): Promise<OmnichannelDeliveryLogItem[]> {
+    const res = await apiClient.get<ApiEnvelope<OmnichannelDeliveryLogItem[]>>(
+      '/notifications/delivery-logs'
+    );
+    return res.data.data;
+  },
+
+  async sendTestOmnichannelAlert(payload: {
+    eventType: OmnichannelEventType;
+    courseId?: string;
+    title?: string;
+    body?: string;
+  }) {
+    const res = await apiClient.post<ApiEnvelope<unknown>>(
+      '/notifications/test-dispatch',
+      payload
+    );
+    return res.data.data;
+  },
+
+  async nudgeStudentOmnichannel(payload: {
+    studentId: string;
+    courseCode?: string;
+    eventType?: OmnichannelEventType;
+    title: string;
+    body: string;
+  }) {
+    const res = await apiClient.post<ApiEnvelope<unknown>>(
+      '/notifications/nudge-student',
+      payload
+    );
+    return res.data.data;
+  },
+
   // 3. Calendar, Profile & RBAC Matrix
   async listCalendarEvents(): Promise<CalendarEventItem[]> {
     const res = await apiClient.get<ApiEnvelope<CalendarEventItem[]>>('/calendar/events');
@@ -121,12 +175,20 @@ export const operationsService = {
   },
 
   async updateMyProfile(payload: {
-    fullName: string;
+    fullName?: string;
     phone?: string | null;
     gradeLevel?: string | null;
     guardianName?: string | null;
     guardianPhone?: string | null;
     address?: string | null;
+    pinCode?: string | null;
+    city?: string | null;
+    state?: string | null;
+    highestQualification?: string | null;
+    institutionOrCompany?: string | null;
+    graduationYear?: string | null;
+    careerGoal?: string | null;
+    referralSource?: string | null;
     qualification?: string | null;
     specialization?: string | null;
     biography?: string | null;

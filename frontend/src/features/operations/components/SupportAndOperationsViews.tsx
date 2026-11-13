@@ -5,6 +5,12 @@ import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { RolePanelShell } from '@/features/dashboards/components/RolePanelShell';
+import {
+  useActiveSessionsQuery,
+  useChangePasswordMutation,
+  useRevokeOtherSessionsMutation,
+  useRevokeSessionMutation,
+} from '@/features/auth/hooks/auth.hook';
 import { RolePanelType } from '@/features/auth/types/auth.types';
 import {
   useCalendarEventsQuery,
@@ -849,8 +855,27 @@ export function RoleCalendarView({ role }: { role: 'STUDENT' | 'TEACHER' }) {
 }
 
 // ============================================================================
-// 5. PROFILE & SETTINGS VIEW (STUDENT & TEACHER)
+// 5. PROFILE, STUDENT ANALYTICS DEMOGRAPHICS & SECURITY VIEW (STUDENT & TEACHER)
 // ============================================================================
+
+const INDIAN_STATES_LIST = [
+  'West Bengal',
+  'Maharashtra',
+  'Karnataka',
+  'Delhi',
+  'Tamil Nadu',
+  'Telangana',
+  'Gujarat',
+  'Uttar Pradesh',
+  'Rajasthan',
+  'Kerala',
+  'Haryana',
+  'Punjab',
+  'Bihar',
+  'Odisha',
+  'Assam',
+  'Madhya Pradesh',
+];
 
 export function RoleProfileAndSettingsView({
   role,
@@ -859,20 +884,59 @@ export function RoleProfileAndSettingsView({
 }) {
   const { data: profile, isLoading } = useMyProfileQuery();
   const updateProfileMutation = useUpdateMyProfileMutation();
+  const changePasswordMutation = useChangePasswordMutation();
+  const { data: activeSessions = [] } = useActiveSessionsQuery();
+  const revokeSessionMutation = useRevokeSessionMutation();
+  const revokeOthersMutation = useRevokeOtherSessionsMutation();
 
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
-  const [extraField, setExtraField] = useState('');
+  const [specialization, setSpecialization] = useState('');
+  const [qualification, setQualification] = useState('');
+
+  // Student Analytics & Demographic Fields (Privacy-Safe: No Aadhaar / PAN)
+  const [pinCode, setPinCode] = useState('');
+  const [city, setCity] = useState('');
+  const [stateName, setStateName] = useState('West Bengal');
+  const [highestQualification, setHighestQualification] = useState('');
+  const [institutionOrCompany, setInstitutionOrCompany] = useState('');
+  const [graduationYear, setGraduationYear] = useState('');
+  const [careerGoal, setCareerGoal] = useState('');
+  const [referralSource, setReferralSource] = useState('');
+  const [guardianName, setGuardianName] = useState('');
+  const [guardianPhone, setGuardianPhone] = useState('');
+  const [address, setAddress] = useState('');
+  const [profileSavedMsg, setProfileSavedMsg] = useState('');
+
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [pwdSuccessMsg, setPwdSuccessMsg] = useState('');
 
   React.useEffect(() => {
     if (profile) {
       setFullName(profile.fullName);
       setPhone(profile.phone || '');
-      setExtraField(
-        profile.studentProfile?.gradeLevel ||
-          profile.teacherProfile?.specialization ||
-          ''
-      );
+      if (profile.studentProfile) {
+        setPinCode(profile.studentProfile.pinCode || '');
+        setCity(profile.studentProfile.city || '');
+        setStateName(profile.studentProfile.state || 'West Bengal');
+        setHighestQualification(
+          profile.studentProfile.highestQualification ||
+            profile.studentProfile.gradeLevel ||
+            ''
+        );
+        setInstitutionOrCompany(profile.studentProfile.institutionOrCompany || '');
+        setGraduationYear(profile.studentProfile.graduationYear || '');
+        setCareerGoal(profile.studentProfile.careerGoal || '');
+        setReferralSource(profile.studentProfile.referralSource || '');
+        setGuardianName(profile.studentProfile.guardianName || '');
+        setGuardianPhone(profile.studentProfile.guardianPhone || '');
+        setAddress(profile.studentProfile.address || '');
+      }
+      if (profile.teacherProfile) {
+        setSpecialization(profile.teacherProfile.specialization || '');
+        setQualification(profile.teacherProfile.qualification || '');
+      }
     }
   }, [profile]);
 
@@ -880,14 +944,14 @@ export function RoleProfileAndSettingsView({
     <RolePanelShell
       role={role}
       operatorName={`${role} Profile & Settings`}
-      operatorSubtitle="Authenticated Identity Record"
-      headerTitle="My Profile, Institutional Code & Account Settings"
+      operatorSubtitle="Identity, Academic Analytics & Security"
+      headerTitle="My Profile, Academic Background & Account Security"
     >
-      <div className="max-w-3xl space-y-6">
+      <div className="max-w-4xl space-y-6">
         {isLoading && <p className="text-xs text-slate-500">Loading your profile...</p>}
         {profile && (
-          <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] p-6 space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-4">
+          <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] p-6 space-y-5">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 dark:border-slate-800 pb-4">
               <div>
                 <h2 className="text-base font-bold">{profile.fullName}</h2>
                 <p className="text-xs text-slate-500">{profile.email}</p>
@@ -899,54 +963,385 @@ export function RoleProfileAndSettingsView({
               </span>
             </div>
 
+            {/* Identity & Contact Fields */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
               <div>
-                <label className="block font-semibold mb-1">Full Name</label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="font-semibold">Registered Legal Name</label>
+                  {role === 'STUDENT' && (
+                    <span className="text-[10px] font-bold text-amber-500">
+                      🔒 Locked (Admin Only)
+                    </span>
+                  )}
+                </div>
                 <input
                   type="text"
                   value={fullName}
-                  onChange={(e) => setFullName(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700"
+                  readOnly={role === 'STUDENT'}
+                  disabled={role === 'STUDENT'}
+                  onChange={(e) => {
+                    if (role !== 'STUDENT') setFullName(e.target.value);
+                  }}
+                  className={`w-full px-3 py-2 rounded-xl border ${
+                    role === 'STUDENT'
+                      ? 'bg-slate-100 dark:bg-slate-900/60 border-slate-200 dark:border-slate-800 text-slate-500 cursor-not-allowed'
+                      : 'bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-700'
+                  }`}
                 />
+                {role === 'STUDENT' && (
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    Your name appears on official certificates and tax invoices. Contact an Administrator if a correction is needed.
+                  </p>
+                )}
               </div>
+
               <div>
-                <label className="block font-semibold mb-1">Phone Number</label>
+                <label className="block font-semibold mb-1">Mobile / WhatsApp Number</label>
                 <input
                   type="text"
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700"
-                />
-              </div>
-              <div className="sm:col-span-2">
-                <label className="block font-semibold mb-1">
-                  {role === 'STUDENT' ? 'Academic Grade / Year' : 'Faculty Specialization'}
-                </label>
-                <input
-                  type="text"
-                  value={extraField}
-                  onChange={(e) => setExtraField(e.target.value)}
+                  placeholder="+91-9876543210"
                   className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700"
                 />
               </div>
             </div>
 
-            <button
-              type="button"
-              disabled={updateProfileMutation.isPending}
-              onClick={() =>
-                updateProfileMutation.mutate({
-                  fullName,
-                  phone,
-                  ...(role === 'STUDENT'
-                    ? { gradeLevel: extraField }
-                    : { specialization: extraField }),
-                })
-              }
-              className="px-4 py-2 rounded-xl text-xs font-bold bg-gradient-to-r from-violet-500 to-cyan-500 text-white"
-            >
-              {updateProfileMutation.isPending ? 'Saving Profile...' : 'Save Profile Changes'}
-            </button>
+            {/* Student Academic, Regional & Career Analytics Fields (Zero Aadhaar/PAN) */}
+            {role === 'STUDENT' ? (
+              <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-4">
+                <div>
+                  <h3 className="text-sm font-bold">
+                    Academic, Regional &amp; Career Profile (For Personalized Learning &amp; Cohort Insights)
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Helps us tailor course cohorts, regional GST tax invoices, and placement/study support. We never ask for government IDs (no Aadhaar or PAN).
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+                  <div>
+                    <label className="block font-semibold mb-1">Postal PIN Code</label>
+                    <input
+                      type="text"
+                      maxLength={6}
+                      value={pinCode}
+                      onChange={(e) => setPinCode(e.target.value.replace(/[^0-9]/g, ''))}
+                      placeholder="e.g. 700091"
+                      className="w-full px-3 py-2 rounded-xl font-mono bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold mb-1">City / Town</label>
+                    <input
+                      type="text"
+                      value={city}
+                      onChange={(e) => setCity(e.target.value)}
+                      placeholder="e.g. Kolkata"
+                      className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold mb-1">State / Union Territory</label>
+                    <select
+                      value={stateName}
+                      onChange={(e) => setStateName(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700"
+                    >
+                      {INDIAN_STATES_LIST.map((st) => (
+                        <option key={st} value={st}>
+                          {st}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold mb-1">Current / Highest Qualification</label>
+                    <select
+                      value={highestQualification}
+                      onChange={(e) => setHighestQualification(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700"
+                    >
+                      <option value="">Select Qualification</option>
+                      <option value="High School (10+2)">High School (10+2)</option>
+                      <option value="Diploma">Diploma</option>
+                      <option value="B.Tech / B.E.">B.Tech / B.E.</option>
+                      <option value="B.Sc / BCA">B.Sc / BCA</option>
+                      <option value="M.Tech / M.Sc / MCA">M.Tech / M.Sc / MCA</option>
+                      <option value="MBA / PGDM">MBA / PGDM</option>
+                      <option value="Ph.D. / Research Scholar">Ph.D. / Research Scholar</option>
+                      <option value="Working Professional">Working Professional</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold mb-1">College / University / Organization</label>
+                    <input
+                      type="text"
+                      value={institutionOrCompany}
+                      onChange={(e) => setInstitutionOrCompany(e.target.value)}
+                      placeholder="e.g. Jadavpur University"
+                      className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold mb-1">Graduation Year</label>
+                    <input
+                      type="text"
+                      maxLength={4}
+                      value={graduationYear}
+                      onChange={(e) => setGraduationYear(e.target.value.replace(/[^0-9]/g, ''))}
+                      placeholder="e.g. 2026"
+                      className="w-full px-3 py-2 rounded-xl font-mono bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold mb-1">Primary Learning / Career Goal</label>
+                    <select
+                      value={careerGoal}
+                      onChange={(e) => setCareerGoal(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700"
+                    >
+                      <option value="">Select Primary Goal</option>
+                      <option value="Software & AI Engineering">Software &amp; AI Engineering</option>
+                      <option value="Data Science & Analytics">Data Science &amp; Analytics</option>
+                      <option value="Cyber Security & Cloud">Cyber Security &amp; Cloud</option>
+                      <option value="Core Sciences & Research">Core Sciences &amp; Research</option>
+                      <option value="Competitive Exams (GATE / NET / JEE)">
+                        Competitive Exams (GATE / NET / JEE)
+                      </option>
+                      <option value="Career Transition / Job Readiness">
+                        Career Transition / Job Readiness
+                      </option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold mb-1">How Did You Hear About Us?</label>
+                    <select
+                      value={referralSource}
+                      onChange={(e) => setReferralSource(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700"
+                    >
+                      <option value="">Select Discovery Channel</option>
+                      <option value="Friend / Student Referral">Friend / Student Referral</option>
+                      <option value="YouTube Channel">YouTube Channel</option>
+                      <option value="LinkedIn / Instagram">LinkedIn / Instagram</option>
+                      <option value="Google Search">Google Search</option>
+                      <option value="College Seminar / Workshop">College Seminar / Workshop</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold mb-1">Parent / Guardian Name</label>
+                    <input
+                      type="text"
+                      value={guardianName}
+                      onChange={(e) => setGuardianName(e.target.value)}
+                      placeholder="Parent / Guardian Name"
+                      className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold mb-1">Parent / Guardian Phone</label>
+                    <input
+                      type="text"
+                      value={guardianPhone}
+                      onChange={(e) => setGuardianPhone(e.target.value)}
+                      placeholder="+91-9876500000"
+                      className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700"
+                    />
+                  </div>
+
+                  <div className="sm:col-span-2">
+                    <label className="block font-semibold mb-1">Residential Address / Locality</label>
+                    <input
+                      type="text"
+                      value={address}
+                      onChange={(e) => setAddress(e.target.value)}
+                      placeholder="Apartment, Street, Locality"
+                      className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700"
+                    />
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs pt-2">
+                <div>
+                  <label className="block font-semibold mb-1">Faculty Qualification</label>
+                  <input
+                    type="text"
+                    value={qualification}
+                    onChange={(e) => setQualification(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold mb-1">Faculty Specialization</label>
+                  <input
+                    type="text"
+                    value={specialization}
+                    onChange={(e) => setSpecialization(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700"
+                  />
+                </div>
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                disabled={updateProfileMutation.isPending}
+                onClick={() => {
+                  setProfileSavedMsg('');
+                  updateProfileMutation.mutate(
+                    role === 'STUDENT'
+                      ? {
+                          phone,
+                          gradeLevel: highestQualification,
+                          highestQualification,
+                          pinCode,
+                          city,
+                          state: stateName,
+                          institutionOrCompany,
+                          graduationYear,
+                          careerGoal,
+                          referralSource,
+                          guardianName,
+                          guardianPhone,
+                          address,
+                        }
+                      : {
+                          fullName,
+                          phone,
+                          qualification,
+                          specialization,
+                        },
+                    {
+                      onSuccess: () =>
+                        setProfileSavedMsg('Profile & analytics details saved successfully ✓'),
+                    }
+                  );
+                }}
+                className="px-5 py-2.5 rounded-xl text-xs font-bold bg-gradient-to-r from-violet-500 to-cyan-500 text-white cursor-pointer"
+              >
+                {updateProfileMutation.isPending ? 'Saving Profile...' : 'Save Profile Changes'}
+              </button>
+              {profileSavedMsg && (
+                <span className="text-xs font-bold text-emerald-500">{profileSavedMsg}</span>
+              )}
+            </div>
+
+            {/* Change Account Password Card */}
+            <div className="pt-4 border-t border-slate-200 dark:border-slate-800 space-y-3">
+              <h3 className="text-sm font-bold flex items-center gap-2">
+                <Shield className="w-4 h-4 text-emerald-400" /> Change Account Password
+              </h3>
+              {pwdSuccessMsg && (
+                <p className="text-xs font-semibold text-emerald-400">{pwdSuccessMsg}</p>
+              )}
+              {changePasswordMutation.isError && (
+                <p className="text-xs text-rose-400">
+                  {(changePasswordMutation.error as { message?: string })?.message ||
+                    'Password update failed. Check your current password.'}
+                </p>
+              )}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                <input
+                  type="password"
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  placeholder="Current Password"
+                  className="px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700"
+                />
+                <input
+                  type="password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="New Password (Min 8 chars, 1 upper, 1 digit)"
+                  className="px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700"
+                />
+                <button
+                  type="button"
+                  disabled={!currentPassword || newPassword.length < 8 || changePasswordMutation.isPending}
+                  onClick={() =>
+                    changePasswordMutation.mutate(
+                      { currentPassword, newPassword },
+                      {
+                        onSuccess: () => {
+                          setCurrentPassword('');
+                          setNewPassword('');
+                          setPwdSuccessMsg('Password updated successfully ✓');
+                        },
+                      }
+                    )
+                  }
+                  className="py-2 px-4 rounded-xl font-bold bg-emerald-600 text-white cursor-pointer"
+                >
+                  {changePasswordMutation.isPending ? 'Updating...' : 'Update Password'}
+                </button>
+              </div>
+            </div>
+
+            {/* Active Device Login Sessions Manager */}
+            <div className="pt-4 border-t border-slate-200 dark:border-slate-800 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-sm font-bold">
+                  Active Login Sessions &amp; Device Security
+                </h3>
+                {activeSessions.length > 1 && (
+                  <button
+                    type="button"
+                    disabled={revokeOthersMutation.isPending}
+                    onClick={() => revokeOthersMutation.mutate()}
+                    className="px-3 py-1 rounded-xl text-xs font-bold bg-rose-600 text-white cursor-pointer"
+                  >
+                    Revoke All Other Devices
+                  </button>
+                )}
+              </div>
+
+              <div className="space-y-2 text-xs">
+                {activeSessions.map((sess) => (
+                  <div
+                    key={sess.id}
+                    className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2"
+                  >
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold text-cyan-400">
+                          {sess.rolePanel} Session
+                        </span>
+                        {sess.isCurrentSession && (
+                          <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 text-[10px] font-bold">
+                            Current Device
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        IP: {sess.ipAddress || '127.0.0.1'} • Agent:{' '}
+                        {(sess.userAgent || 'Browser').slice(0, 60)}
+                      </p>
+                    </div>
+                    {!sess.isCurrentSession && (
+                      <button
+                        type="button"
+                        onClick={() => revokeSessionMutation.mutate(sess.id)}
+                        className="px-2.5 py-1 rounded-lg bg-rose-500/20 text-rose-400 font-bold text-[11px] cursor-pointer"
+                      >
+                        Revoke
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         )}
       </div>

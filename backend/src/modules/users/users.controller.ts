@@ -28,8 +28,9 @@ export class UsersController {
     const updated = await UsersService.updateUserStatus(
       req.user,
       String(req.params.userId),
-      req.body.status
+      req.body.status,
+      req.body.fullName
     );
-    return apiResponse(res, 200, 'User status updated successfully', updated);
+    return apiResponse(res, 200, 'User account updated successfully by Admin', updated);
   });
 }

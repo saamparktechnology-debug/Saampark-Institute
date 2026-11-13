@@ -1,4 +1,4 @@
-import { AccountStatus, RoleType } from "@prisma/client";
+import { AccountStatus, RoleType } from '@prisma/client';
 
 export interface UserDirectoryItemDto {
   id: string;

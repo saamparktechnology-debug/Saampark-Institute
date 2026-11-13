@@ -46,6 +46,14 @@ export interface ExamQuestionDto {
   options: ExamQuestionOptionItem[];
 }
 
+export type ExamQuestionItem = ExamQuestionDto;
+
+export interface ExamProctoringViolationEvent {
+  type: 'TAB_SWITCH' | 'WINDOW_BLUR' | 'FULLSCREEN_EXIT' | 'COPY_PASTE_BLOCKED';
+  occurredAt: string;
+  detail?: string;
+}
+
 export interface ExamAttemptItem {
   id: string;
   examId: string;
@@ -59,6 +67,14 @@ export interface ExamAttemptItem {
   startedAt: string;
   submittedAt: string | null;
   evaluatedAt: string | null;
+  savedAnswers?: Record<string, string>;
+  remainingSeconds?: number | null;
+  tabSwitchCount?: number;
+  fullscreenExits?: number;
+  copyPasteBlockedCount?: number;
+  autoSubmittedByProctor?: boolean;
+  integrityStatus?: 'CLEAN' | 'WARNING' | 'FLAGGED_VIOLATION';
+  violations?: ExamProctoringViolationEvent[];
 }
 
 export interface ExamItem {
@@ -68,6 +84,7 @@ export interface ExamItem {
   courseTitle: string;
   title: string;
   summary: string;
+  maxTabSwitches?: number;
   durationSeconds: number;
   totalMarks: string;
   passMarks: string;
@@ -131,6 +148,7 @@ export interface CertificateItem {
   certificateNumber: string;
   status: 'ISSUED' | 'REVOKED';
   fileReference: string | null;
+  publicVerificationPath?: string;
   issuedAt: string;
   revokedAt: string | null;
   revocationReason: string | null;
@@ -141,8 +159,13 @@ export interface CertificateVerificationResult {
   certificateNumber: string;
   status: 'ISSUED' | 'REVOKED';
   studentName: string;
+  studentCode?: string | null;
   courseCode: string;
   courseTitle: string;
+  courseLevel?: string;
+  minAttendancePercent?: string;
+  minPassMarksPercent?: string;
+  publicVerificationPath?: string;
   issuedAt: string;
   revokedAt: string | null;
   revocationReason: string | null;

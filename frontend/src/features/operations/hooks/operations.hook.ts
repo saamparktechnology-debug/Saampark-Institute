@@ -109,6 +109,7 @@ export function useDispatchNotificationMutation() {
     mutationFn: operationsService.dispatchNotification,
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.operations.notifications() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.operations.deliveryLogs() });
     },
   });
 }
@@ -129,6 +130,57 @@ export function useMarkAllNotificationsReadMutation() {
   return useMutation({
     mutationFn: () => operationsService.markAllNotificationsRead(),
     onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.operations.notifications() });
+    },
+  });
+}
+
+export function useOmnichannelSettingsQuery() {
+  return useQuery({
+    queryKey: queryKeys.operations.omnichannelSettings(),
+    queryFn: () => operationsService.getOmnichannelSettings(),
+  });
+}
+
+export function useUpdateOmnichannelSettingsMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: operationsService.updateOmnichannelSettings,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.operations.omnichannelSettings(),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.operations.notifications(),
+      });
+    },
+  });
+}
+
+export function useOmnichannelDeliveryLogsQuery() {
+  return useQuery({
+    queryKey: queryKeys.operations.deliveryLogs(),
+    queryFn: () => operationsService.listOmnichannelDeliveryLogs(),
+  });
+}
+
+export function useTestOmnichannelDispatchMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: operationsService.sendTestOmnichannelAlert,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.operations.deliveryLogs() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.operations.notifications() });
+    },
+  });
+}
+
+export function useNudgeStudentOmnichannelMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: operationsService.nudgeStudentOmnichannel,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.operations.deliveryLogs() });
       void queryClient.invalidateQueries({ queryKey: queryKeys.operations.notifications() });
     },
   });

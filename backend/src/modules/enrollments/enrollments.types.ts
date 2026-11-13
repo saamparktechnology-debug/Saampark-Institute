@@ -11,11 +11,24 @@ export interface InstallmentDto {
   paidAt: string | null;
 }
 
+export interface EnrollmentOnboardingStateDto {
+  enrollmentId: string;
+  step1PlanAndPaymentVerified: boolean;
+  step2AcademicPolicyAccepted: boolean;
+  step3WhatsappAlertsOptIn: boolean;
+  whatsappNumber: string;
+  step4StarterKitAndFirstLesson: boolean;
+  completedStepsCount: number;
+  isCompleted: boolean;
+  completedAt: string | null;
+}
+
 export interface EnrollmentSummaryDto {
   id: string;
   studentId: string;
   studentFullName: string;
   studentEmail: string;
+  studentPhone?: string | null;
   courseId: string;
   courseCode: string;
   courseTitle: string;
@@ -29,4 +42,5 @@ export interface EnrollmentSummaryDto {
   suspendedAt: string | null;
   completedAt: string | null;
   installments: InstallmentDto[];
+  onboarding?: EnrollmentOnboardingStateDto;
 }

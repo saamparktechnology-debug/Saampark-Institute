@@ -13,15 +13,36 @@ import { validateRequest } from '../../middlewares/validate.middleware';
 // VALIDATION SCHEMAS
 // ----------------------------------------------------------------------------
 
+export interface StudentAnalyticsProfileDto {
+  pinCode: string;
+  city: string;
+  state: string;
+  highestQualification: string;
+  institutionOrCompany: string;
+  graduationYear: string;
+  careerGoal: string;
+  referralSource: string;
+}
+
 export const updateProfileValidation = {
   body: z.object({
-    fullName: z.string().trim().min(2).max(150),
+    fullName: z.string().trim().min(2).max(150).optional(),
     phone: z.string().trim().min(8).max(24).optional().nullable(),
     avatarUrl: z.string().url().optional().nullable(),
     gradeLevel: z.string().trim().max(64).optional().nullable(),
     guardianName: z.string().trim().max(150).optional().nullable(),
     guardianPhone: z.string().trim().max(32).optional().nullable(),
     address: z.string().trim().max(500).optional().nullable(),
+    // Privacy-Safe Student Analytics Fields (Zero Government IDs like Aadhaar / PAN)
+    pinCode: z.string().trim().max(12).optional().nullable(),
+    city: z.string().trim().max(80).optional().nullable(),
+    state: z.string().trim().max(80).optional().nullable(),
+    highestQualification: z.string().trim().max(120).optional().nullable(),
+    institutionOrCompany: z.string().trim().max(160).optional().nullable(),
+    graduationYear: z.string().trim().max(16).optional().nullable(),
+    careerGoal: z.string().trim().max(160).optional().nullable(),
+    referralSource: z.string().trim().max(120).optional().nullable(),
+    // Teacher / Support fields
     qualification: z.string().trim().max(255).optional().nullable(),
     specialization: z.string().trim().max(255).optional().nullable(),
     biography: z.string().trim().max(2000).optional().nullable(),
@@ -57,8 +78,7 @@ export const toggleRolePermissionValidation = {
 
 export class CalendarProfileRbacService {
   /**
-   * Returns a unified chronological schedule & calendar feed scoped strictly to the actor's role (`C-012`, `C-013`):
-   * - Aggregates `LiveClass`, `Assignment` due dates, `Exam` windows, and `Installment` due dates.
+   * Returns a unified chronological schedule & calendar feed scoped strictly to the actor's role (`C-012`, `C-013`).
    */
   static async listCalendarEvents(actor: AuthenticatedActor) {
     let courseIds: string[] = [];
@@ -163,22 +183,42 @@ export class CalendarProfileRbacService {
   }
 
   /**
-   * Retrieves the authenticated user's profile and role-specific profile record.
+   * Retrieves the authenticated user's profile and role-specific profile record,
+   * including privacy-safe Student Analytics fields (`pinCode`, `city`, `state`, `highestQualification`, `institutionOrCompany`, `graduationYear`, `careerGoal`, `referralSource`).
    */
   static async getMyProfile(actor: AuthenticatedActor) {
-    const user = await prisma.user.findUnique({
-      where: { id: actor.id },
-      include: {
-        studentProfile: true,
-        teacherProfile: true,
-        supportAgentProfile: true,
-        wallet: { select: { availableBalance: true, reservedBalance: true, currency: true } },
-        referralCode: { select: { code: true } },
-      },
-    });
+    const [user, latestAnalyticsLog] = await Promise.all([
+      prisma.user.findUnique({
+        where: { id: actor.id },
+        include: {
+          studentProfile: true,
+          teacherProfile: true,
+          supportAgentProfile: true,
+          wallet: { select: { availableBalance: true, reservedBalance: true, currency: true } },
+          referralCode: { select: { code: true } },
+        },
+      }),
+      prisma.auditLog.findFirst({
+        where: {
+          entityType: 'User',
+          entityId: actor.id,
+          action: { in: ['USER_PROFILE_UPDATED', 'USER_PROFILE_ANALYTICS_UPDATED'] },
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+    ]);
 
     if (!user) {
       throw ApiError.notFound('User profile not found.');
+    }
+
+    let analyticsMeta: Partial<StudentAnalyticsProfileDto> = {};
+    if (latestAnalyticsLog?.afterDataJson) {
+      try {
+        analyticsMeta = JSON.parse(latestAnalyticsLog.afterDataJson) as Partial<StudentAnalyticsProfileDto>;
+      } catch {
+        analyticsMeta = {};
+      }
     }
 
     return {
@@ -198,6 +238,15 @@ export class CalendarProfileRbacService {
             guardianName: user.studentProfile.guardianName,
             guardianPhone: user.studentProfile.guardianPhone,
             address: user.studentProfile.address,
+            pinCode: analyticsMeta.pinCode || '',
+            city: analyticsMeta.city || '',
+            state: analyticsMeta.state || 'West Bengal',
+            highestQualification:
+              analyticsMeta.highestQualification || user.studentProfile.gradeLevel || '',
+            institutionOrCompany: analyticsMeta.institutionOrCompany || '',
+            graduationYear: analyticsMeta.graduationYear || '',
+            careerGoal: analyticsMeta.careerGoal || '',
+            referralSource: analyticsMeta.referralSource || '',
           }
         : null,
       teacherProfile: user.teacherProfile
@@ -225,28 +274,62 @@ export class CalendarProfileRbacService {
 
   /**
    * Updates the authenticated user's profile fields and writes an audit log entry.
+   * HARD RULE: Students cannot change their `fullName` (only an Administrator can change a student's name).
    */
   static async updateMyProfile(
     actor: AuthenticatedActor,
     payload: {
-      fullName: string;
+      fullName?: string;
       phone?: string | null;
       avatarUrl?: string | null;
       gradeLevel?: string | null;
       guardianName?: string | null;
       guardianPhone?: string | null;
       address?: string | null;
+      pinCode?: string | null;
+      city?: string | null;
+      state?: string | null;
+      highestQualification?: string | null;
+      institutionOrCompany?: string | null;
+      graduationYear?: string | null;
+      careerGoal?: string | null;
+      referralSource?: string | null;
       qualification?: string | null;
       specialization?: string | null;
       biography?: string | null;
       department?: string | null;
     }
   ) {
+    const existingUser = await prisma.user.findUnique({
+      where: { id: actor.id },
+      select: { id: true, fullName: true, role: true },
+    });
+
+    if (!existingUser) {
+      throw ApiError.notFound('User not found.');
+    }
+
+    // Enforce Student Name Lock: Only ADMIN can change a student's legal name
+    if (
+      actor.role === 'STUDENT' &&
+      payload.fullName !== undefined &&
+      payload.fullName.trim() !== existingUser.fullName
+    ) {
+      throw ApiError.forbidden(
+        'Students cannot modify their registered legal name. Only an Administrator can change a student name.'
+      );
+    }
+
+    const effectiveFullName =
+      actor.role === 'STUDENT'
+        ? existingUser.fullName
+        : payload.fullName?.trim() || existingUser.fullName;
+
     await prisma.$transaction(async (tx) => {
       await tx.user.update({
         where: { id: actor.id },
         data: {
-          fullName: payload.fullName,
+          fullName: effectiveFullName,
           phone: payload.phone !== undefined ? payload.phone : undefined,
           avatarUrl: payload.avatarUrl !== undefined ? payload.avatarUrl : undefined,
         },
@@ -256,7 +339,8 @@ export class CalendarProfileRbacService {
         await tx.studentProfile.updateMany({
           where: { userId: actor.id },
           data: {
-            gradeLevel: payload.gradeLevel ?? undefined,
+            gradeLevel:
+              payload.highestQualification ?? payload.gradeLevel ?? undefined,
             guardianName: payload.guardianName ?? undefined,
             guardianPhone: payload.guardianPhone ?? undefined,
             address: payload.address ?? undefined,
@@ -283,10 +367,21 @@ export class CalendarProfileRbacService {
       await tx.auditLog.create({
         data: {
           actorUserId: actor.id,
-          action: 'USER_PROFILE_UPDATED',
+          action: 'USER_PROFILE_ANALYTICS_UPDATED',
           entityType: 'User',
           entityId: actor.id,
-          afterDataJson: JSON.stringify({ fullName: payload.fullName }),
+          afterDataJson: JSON.stringify({
+            fullName: effectiveFullName,
+            pinCode: payload.pinCode || '',
+            city: payload.city || '',
+            state: payload.state || 'West Bengal',
+            highestQualification:
+              payload.highestQualification || payload.gradeLevel || '',
+            institutionOrCompany: payload.institutionOrCompany || '',
+            graduationYear: payload.graduationYear || '',
+            careerGoal: payload.careerGoal || '',
+            referralSource: payload.referralSource || '',
+          }),
         },
       });
     });

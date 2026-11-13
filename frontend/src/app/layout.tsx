@@ -1,11 +1,11 @@
-import type { Metadata } from "next";
-import "./globals.css";
-import { AppProviders } from "@/providers/AppProviders";
+import type { Metadata } from 'next';
+import './globals.css';
+import { AppProviders } from '@/providers/AppProviders';
 
 export const metadata: Metadata = {
-  title: "Gemini Argon — Online Learning Platform",
+  title: 'Gemini Argon — Online Learning Platform',
   description:
-    "Role-based Online Learning Platform with Admin, Student, Teacher Cockpit, and Support Team Command Center.",
+    'Role-based Online Learning Platform with Admin, Student, Teacher Cockpit, and Support Team Command Center.',
 };
 
 const themeInitScript = `

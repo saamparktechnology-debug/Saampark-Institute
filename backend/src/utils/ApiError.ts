@@ -3,7 +3,10 @@ export type ErrorCode =
   | 'AUTH_INVALID_CREDENTIALS'
   | 'AUTH_TOKEN_EXPIRED'
   | 'AUTH_UNAUTHORIZED'
+  | 'OTP_EXPIRED_OR_INVALID'
+  | 'RATE_LIMIT_EXCEEDED'
   | 'ACCOUNT_SUSPENDED'
+  | 'INSTALLMENT_OVERDUE_LOCKED'
   | 'ROLE_PANEL_MISMATCH'
   | 'PERMISSION_DENIED'
   | 'RESOURCE_FORBIDDEN'
@@ -37,19 +40,32 @@ export class ApiError extends Error {
     Error.captureStackTrace?.(this, this.constructor);
   }
 
-  static badRequest(message: string, code: ErrorCode = 'VALIDATION_ERROR', errors: Record<string, unknown> | null = null) {
+  static badRequest(
+    message: string,
+    code: ErrorCode = 'VALIDATION_ERROR',
+    errors: Record<string, unknown> | null = null
+  ) {
     return new ApiError(400, code, message, errors);
   }
 
-  static unauthorized(message = 'Authentication required', code: ErrorCode = 'AUTH_UNAUTHORIZED') {
+  static unauthorized(
+    message = 'Authentication required',
+    code: ErrorCode = 'AUTH_UNAUTHORIZED'
+  ) {
     return new ApiError(401, code, message);
   }
 
-  static forbidden(message = 'You do not have permission to access this resource', code: ErrorCode = 'RESOURCE_FORBIDDEN') {
+  static forbidden(
+    message = 'You do not have permission to access this resource',
+    code: ErrorCode = 'RESOURCE_FORBIDDEN'
+  ) {
     return new ApiError(403, code, message);
   }
 
-  static notFound(message = 'Requested resource not found', code: ErrorCode = 'RESOURCE_NOT_FOUND') {
+  static notFound(
+    message = 'Requested resource not found',
+    code: ErrorCode = 'RESOURCE_NOT_FOUND'
+  ) {
     return new ApiError(404, code, message);
   }
 
@@ -57,7 +73,10 @@ export class ApiError extends Error {
     return new ApiError(409, code, message);
   }
 
-  static unprocessable(message: string, code: ErrorCode = 'BUSINESS_RULE_VIOLATION') {
+  static unprocessable(
+    message: string,
+    code: ErrorCode = 'BUSINESS_RULE_VIOLATION'
+  ) {
     return new ApiError(422, code, message);
   }
 }

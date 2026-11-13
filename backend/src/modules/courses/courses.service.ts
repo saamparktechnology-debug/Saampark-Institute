@@ -4,13 +4,30 @@ import { AuthenticatedActor } from '../../types/express';
 import { ApiError } from '../../utils/ApiError';
 import { parsePaginationAndFilters, buildPaginationMeta } from '../../utils/pagination';
 import { assertCourseAccessScope } from '../../middlewares/auth.middleware';
+import { OmnichannelMessagingService } from '../../integrations/messaging.adapter';
 import {
   CourseCategoryDto,
   CourseSummaryDto,
   AssignedTeacherDto,
   PaymentPlanTemplateDto,
   CourseSectionDto,
+  CourseLessonProgressDto,
+  TeacherCohortStudentDto,
+  CourseDoubtThreadDto,
+  CourseDoubtReplyDto,
 } from './courses.types';
+
+/**
+ * Pure helper to calculate course completion percentage from completed lesson IDs and total lessons.
+ */
+export function calculateLessonProgressPercent(
+  completedLessonCount: number,
+  totalLessonsCount: number
+): number {
+  if (totalLessonsCount <= 0) return 0;
+  const pct = (completedLessonCount / totalLessonsCount) * 100;
+  return Math.min(100, Math.max(0, Number(pct.toFixed(2))));
+}
 
 export class CoursesService {
   static async listCategories(actor: AuthenticatedActor): Promise<CourseCategoryDto[]> {
@@ -191,9 +208,7 @@ export class CoursesService {
   }
 
   /**
-   * Fetches course detail.
-   * Non-preview lesson references are only returned if the student has an active enrollment,
-   * the teacher is actively assigned to the course, or the actor is an Admin.
+   * Fetches course detail including completed lesson IDs for enrolled students.
    */
   static async getCourseDetail(
     actor: AuthenticatedActor,
@@ -236,6 +251,9 @@ export class CoursesService {
     }
 
     let studentHasActiveAccess = false;
+    let completedLessonIds: string[] = [];
+    let studentProgressPercent: string | undefined;
+
     if (actor.role === 'STUDENT') {
       const enrollment = await prisma.enrollment.findFirst({
         where: {
@@ -243,10 +261,35 @@ export class CoursesService {
           studentId: actor.id,
           status: { in: ['ACTIVE', 'COMPLETED'] },
         },
-        select: { id: true },
+        select: { id: true, progressPercent: true },
       });
       studentHasActiveAccess = Boolean(enrollment);
+      if (enrollment) {
+        studentProgressPercent = enrollment.progressPercent.toFixed(2);
+        const progressLog = await prisma.auditLog.findFirst({
+          where: {
+            action: 'LESSON_PROGRESS_UPDATED',
+            entityType: 'Enrollment',
+            entityId: enrollment.id,
+          },
+          orderBy: { createdAt: 'desc' },
+        });
+        if (progressLog?.afterDataJson) {
+          try {
+            const parsed = JSON.parse(progressLog.afterDataJson) as {
+              completedLessonIds?: string[];
+            };
+            if (Array.isArray(parsed.completedLessonIds)) {
+              completedLessonIds = parsed.completedLessonIds;
+            }
+          } catch {
+            completedLessonIds = [];
+          }
+        }
+      }
     }
+
+    const completedSet = new Set(completedLessonIds);
 
     const sections: CourseSectionDto[] = course.sections.map((sec) => ({
       id: sec.id,
@@ -264,6 +307,7 @@ export class CoursesService {
           durationSeconds: l.durationSeconds,
           sortOrder: l.sortOrder,
           isPreview: l.isPreview,
+          isCompleted: completedSet.has(l.id),
         })),
     }));
 
@@ -305,7 +349,239 @@ export class CoursesService {
       })),
       sections,
       enrollmentCount: course._count.enrollments,
+      completedLessonIds,
+      studentProgressPercent,
     };
+  }
+
+  /**
+   * Student marks or toggles a curriculum lesson as completed, dynamically recalculating `Enrollment.progressPercent`.
+   */
+  static async toggleLessonCompletion(
+    actor: AuthenticatedActor,
+    courseId: string,
+    lessonId: string,
+    completed?: boolean
+  ): Promise<CourseLessonProgressDto> {
+    if (actor.role !== 'STUDENT') {
+      throw ApiError.forbidden('Only enrolled students can track personal lesson completion.');
+    }
+
+    const [enrollment, sections] = await Promise.all([
+      prisma.enrollment.findFirst({
+        where: {
+          courseId,
+          studentId: actor.id,
+          status: { in: ['ACTIVE', 'COMPLETED'] },
+        },
+      }),
+      prisma.courseSection.findMany({
+        where: { courseId },
+        include: { lessons: { select: { id: true } } },
+      }),
+    ]);
+
+    if (!enrollment) {
+      throw ApiError.forbidden('An active enrollment is required to record lesson progress.');
+    }
+
+    const allLessonIds = sections.flatMap((s) => s.lessons.map((l) => l.id));
+    if (!allLessonIds.includes(lessonId)) {
+      throw ApiError.notFound('Lesson not found in this course.');
+    }
+
+    const latestLog = await prisma.auditLog.findFirst({
+      where: {
+        action: 'LESSON_PROGRESS_UPDATED',
+        entityType: 'Enrollment',
+        entityId: enrollment.id,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const completedSet = new Set<string>();
+    if (latestLog?.afterDataJson) {
+      try {
+        const parsed = JSON.parse(latestLog.afterDataJson) as { completedLessonIds?: string[] };
+        if (Array.isArray(parsed.completedLessonIds)) {
+          for (const id of parsed.completedLessonIds) {
+            if (allLessonIds.includes(id)) {
+              completedSet.add(id);
+            }
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    const shouldComplete =
+      completed !== undefined ? completed : !completedSet.has(lessonId);
+
+    if (shouldComplete) {
+      completedSet.add(lessonId);
+    } else {
+      completedSet.delete(lessonId);
+    }
+
+    const completedLessonIds = Array.from(completedSet);
+    const totalLessons = allLessonIds.length;
+    const progressNumber = calculateLessonProgressPercent(
+      completedLessonIds.length,
+      totalLessons
+    );
+
+    const updatedEnrollment = await prisma.$transaction(async (tx) => {
+      const enr = await tx.enrollment.update({
+        where: { id: enrollment.id },
+        data: {
+          progressPercent: new Prisma.Decimal(progressNumber.toFixed(2)),
+          status: progressNumber >= 100 ? 'COMPLETED' : 'ACTIVE',
+          completedAt: progressNumber >= 100 ? enrollment.completedAt || new Date() : null,
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          actorUserId: actor.id,
+          action: 'LESSON_PROGRESS_UPDATED',
+          entityType: 'Enrollment',
+          entityId: enrollment.id,
+          afterDataJson: JSON.stringify({
+            courseId,
+            lessonId,
+            completedLessonIds,
+            completedCount: completedLessonIds.length,
+            totalLessons,
+            progressPercent: progressNumber.toFixed(2),
+          }),
+        },
+      });
+
+      return enr;
+    });
+
+    return {
+      courseId,
+      enrollmentId: enrollment.id,
+      completedLessonIds,
+      completedCount: completedLessonIds.length,
+      totalLessons,
+      progressPercent: updatedEnrollment.progressPercent.toFixed(2),
+    };
+  }
+
+  /**
+   * Lists the student cohort roster across the teacher's assigned courses (or all courses for Admin).
+   */
+  static async listTeacherStudentsRoster(
+    actor: AuthenticatedActor
+  ): Promise<TeacherCohortStudentDto[]> {
+    if (actor.role !== 'TEACHER' && actor.role !== 'ADMIN') {
+      throw ApiError.forbidden('Only Teachers and Administrators can view the cohort student roster.');
+    }
+
+    const where: Prisma.EnrollmentWhereInput =
+      actor.role === 'TEACHER'
+        ? {
+            course: {
+              teacherAssignments: {
+                some: { teacherId: actor.id, status: 'ACTIVE' },
+              },
+            },
+          }
+        : {};
+
+    const enrollments = await prisma.enrollment.findMany({
+      where,
+      orderBy: { enrolledAt: 'desc' },
+      include: {
+        student: {
+          select: {
+            id: true,
+            fullName: true,
+            email: true,
+            phone: true,
+            studentProfile: { select: { studentCode: true } },
+          },
+        },
+        course: { select: { id: true, code: true, title: true } },
+        installments: { select: { status: true } },
+      },
+    });
+
+    const enrollmentIds = enrollments.map((e) => e.id);
+    const onboardingLogs =
+      enrollmentIds.length > 0
+        ? await prisma.auditLog.findMany({
+            where: {
+              action: 'COURSE_ONBOARDING_UPDATED',
+              entityType: 'Enrollment',
+              entityId: { in: enrollmentIds },
+            },
+            orderBy: { createdAt: 'desc' },
+          })
+        : [];
+
+    const onboardingCompletedSet = new Set<string>();
+    for (const log of onboardingLogs) {
+      if (log.afterDataJson) {
+        try {
+          const parsed = JSON.parse(log.afterDataJson) as { completedAt?: string | null };
+          if (parsed.completedAt) {
+            onboardingCompletedSet.add(log.entityId);
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    return enrollments.map((e) => {
+      const paidInstallmentsCount = e.installments.filter(
+        (i) => i.status === 'PAID'
+      ).length;
+      return {
+        enrollmentId: e.id,
+        studentId: e.student.id,
+        studentName: e.student.fullName,
+        studentEmail: e.student.email,
+        studentPhone: e.student.phone,
+        studentCode: e.student.studentProfile?.studentCode || null,
+        courseId: e.course.id,
+        courseCode: e.course.code,
+        courseTitle: e.course.title,
+        enrollmentStatus: e.status,
+        progressPercent: e.progressPercent.toFixed(2),
+        paidInstallmentsCount,
+        totalInstallmentsCount: e.installments.length,
+        onboardingCompleted:
+          onboardingCompletedSet.has(e.id) || Number(e.progressPercent) >= 5,
+        enrolledAt: e.enrolledAt.toISOString(),
+      };
+    });
+  }
+
+  /**
+   * Teacher or Admin broadcasts an announcement to all enrolled students in `courseId` via WhatsApp + Email + In-App.
+   */
+  static async broadcastCourseAnnouncement(
+    actor: AuthenticatedActor,
+    courseId: string,
+    payload: { title: string; body: string }
+  ) {
+    if (actor.role !== 'ADMIN' && actor.role !== 'TEACHER') {
+      throw ApiError.forbidden('Only Administrators or assigned Teachers can broadcast course announcements.');
+    }
+    await assertCourseAccessScope(actor, courseId);
+
+    return OmnichannelMessagingService.dispatchToCourseCohort({
+      actorId: actor.id,
+      courseId,
+      eventType: 'COURSE_ANNOUNCEMENT',
+      title: payload.title,
+      body: payload.body,
+    });
   }
 
   /**
@@ -404,7 +680,8 @@ export class CoursesService {
         where: { id: courseId },
         data: {
           status,
-          publishedAt: status === 'PUBLISHED' && !existing.publishedAt ? new Date() : existing.publishedAt,
+          publishedAt:
+            status === 'PUBLISHED' && !existing.publishedAt ? new Date() : existing.publishedAt,
         },
       });
 
@@ -423,10 +700,6 @@ export class CoursesService {
     return this.getCourseDetail(actor, courseId);
   }
 
-  /**
-   * Assigns or updates a teacher on a course (Multi-teacher support: PRIMARY, CO_INSTRUCTOR, TEACHING_ASSISTANT)
-   * with configurable revenueSharePercent (C-026, C-029).
-   */
   static async assignTeacherToCourse(
     actor: AuthenticatedActor,
     courseId: string,
@@ -617,5 +890,210 @@ export class CoursesService {
         isPreview: payload.isPreview,
       },
     });
+  }
+
+  /**
+   * Lists academic Q&A / Doubt threads for a course (`GET /api/v1/courses/:courseId/doubts`).
+   */
+  static async listCourseDoubts(
+    actor: AuthenticatedActor,
+    courseId: string
+  ): Promise<CourseDoubtThreadDto[]> {
+    await assertCourseAccessScope(actor, courseId);
+
+    const [doubtLogs, replyLogs] = await Promise.all([
+      prisma.auditLog.findMany({
+        where: {
+          action: 'COURSE_DOUBT_CREATED',
+          entityType: 'CourseDoubt',
+          reason: courseId,
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 50,
+        include: { actor: { select: { id: true, fullName: true, role: true } } },
+      }),
+      prisma.auditLog.findMany({
+        where: {
+          action: 'COURSE_DOUBT_REPLIED',
+          entityType: 'CourseDoubtReply',
+          reason: courseId,
+        },
+        orderBy: { createdAt: 'asc' },
+        include: { actor: { select: { id: true, fullName: true, role: true } } },
+      }),
+    ]);
+
+    const repliesByDoubtId = new Map<string, CourseDoubtReplyDto[]>();
+    const resolvedDoubtIds = new Set<string>();
+
+    for (const rLog of replyLogs) {
+      let parsed: Record<string, unknown> = {};
+      if (rLog.afterDataJson) {
+        try {
+          parsed = JSON.parse(rLog.afterDataJson) as Record<string, unknown>;
+        } catch {
+          parsed = {};
+        }
+      }
+      const doubtId = rLog.entityId;
+      const senderRole = (rLog.actor?.role || 'STUDENT') as
+        | 'ADMIN'
+        | 'STUDENT'
+        | 'TEACHER'
+        | 'SUPPORT';
+      if (senderRole === 'TEACHER' || senderRole === 'ADMIN') {
+        resolvedDoubtIds.add(doubtId);
+      }
+      const list = repliesByDoubtId.get(doubtId) || [];
+      list.push({
+        id: rLog.id,
+        doubtId,
+        senderId: rLog.actorUserId || '',
+        senderName: rLog.actor?.fullName || 'Faculty Member',
+        senderRole,
+        message: String(parsed.message || ''),
+        createdAt: rLog.createdAt.toISOString(),
+      });
+      repliesByDoubtId.set(doubtId, list);
+    }
+
+    return doubtLogs.map((dLog) => {
+      let parsed: Record<string, unknown> = {};
+      if (dLog.afterDataJson) {
+        try {
+          parsed = JSON.parse(dLog.afterDataJson) as Record<string, unknown>;
+        } catch {
+          parsed = {};
+        }
+      }
+      const replies = repliesByDoubtId.get(dLog.id) || [];
+      return {
+        id: dLog.id,
+        courseId,
+        lessonTitle: parsed.lessonTitle ? String(parsed.lessonTitle) : null,
+        subject: String(parsed.subject || 'Academic Doubt'),
+        question: String(parsed.question || ''),
+        studentId: dLog.actorUserId || '',
+        studentName: dLog.actor?.fullName || 'Enrolled Student',
+        status: resolvedDoubtIds.has(dLog.id) ? 'RESOLVED' : 'OPEN',
+        createdAt: dLog.createdAt.toISOString(),
+        replies,
+      };
+    });
+  }
+
+  /**
+   * Enrolled student (or instructor) posts a new academic doubt / Q&A thread in a course.
+   */
+  static async createCourseDoubt(
+    actor: AuthenticatedActor,
+    courseId: string,
+    payload: { lessonTitle?: string; subject: string; question: string }
+  ): Promise<CourseDoubtThreadDto> {
+    await assertCourseAccessScope(actor, courseId);
+
+    const created = await prisma.auditLog.create({
+      data: {
+        actorUserId: actor.id,
+        action: 'COURSE_DOUBT_CREATED',
+        entityType: 'CourseDoubt',
+        entityId: courseId,
+        reason: courseId,
+        afterDataJson: JSON.stringify({
+          courseId,
+          lessonTitle: payload.lessonTitle || null,
+          subject: payload.subject,
+          question: payload.question,
+        }),
+      },
+    });
+
+    return {
+      id: created.id,
+      courseId,
+      lessonTitle: payload.lessonTitle || null,
+      subject: payload.subject,
+      question: payload.question,
+      studentId: actor.id,
+      studentName: actor.fullName,
+      status: 'OPEN',
+      createdAt: created.createdAt.toISOString(),
+      replies: [],
+    };
+  }
+
+  /**
+   * Teacher, Admin, or Student replies to a course doubt thread.
+   * When a Teacher or Admin replies, the student who posted the doubt automatically receives
+   * a WhatsApp + Email + In-App alert!
+   */
+  static async replyToCourseDoubt(
+    actor: AuthenticatedActor,
+    courseId: string,
+    doubtId: string,
+    payload: { message: string }
+  ): Promise<CourseDoubtReplyDto> {
+    await assertCourseAccessScope(actor, courseId);
+
+    const [doubtLog, course] = await Promise.all([
+      prisma.auditLog.findUnique({ where: { id: doubtId } }),
+      prisma.course.findUnique({
+        where: { id: courseId },
+        select: { code: true, title: true },
+      }),
+    ]);
+
+    if (!doubtLog || doubtLog.action !== 'COURSE_DOUBT_CREATED') {
+      throw ApiError.notFound('Course doubt thread not found.');
+    }
+
+    const replyLog = await prisma.auditLog.create({
+      data: {
+        actorUserId: actor.id,
+        action: 'COURSE_DOUBT_REPLIED',
+        entityType: 'CourseDoubtReply',
+        entityId: doubtId,
+        reason: courseId,
+        afterDataJson: JSON.stringify({
+          courseId,
+          doubtId,
+          message: payload.message,
+        }),
+      },
+    });
+
+    if (
+      (actor.role === 'TEACHER' || actor.role === 'ADMIN') &&
+      doubtLog.actorUserId &&
+      doubtLog.actorUserId !== actor.id
+    ) {
+      let subject = 'your course doubt';
+      if (doubtLog.afterDataJson) {
+        try {
+          const parsed = JSON.parse(doubtLog.afterDataJson) as { subject?: string };
+          if (parsed.subject) subject = `"${parsed.subject}"`;
+        } catch {
+          // ignore
+        }
+      }
+      await OmnichannelMessagingService.dispatchToUsers({
+        actorId: actor.id,
+        eventType: 'COURSE_ANNOUNCEMENT',
+        courseCode: course?.code || null,
+        title: `Faculty Answered Your Doubt (${course?.code || 'Course'})`,
+        body: `${actor.fullName} replied to ${subject}: "${payload.message}"`,
+        recipientUserIds: [doubtLog.actorUserId],
+      });
+    }
+
+    return {
+      id: replyLog.id,
+      doubtId,
+      senderId: actor.id,
+      senderName: actor.fullName,
+      senderRole: actor.role,
+      message: payload.message,
+      createdAt: replyLog.createdAt.toISOString(),
+    };
   }
 }

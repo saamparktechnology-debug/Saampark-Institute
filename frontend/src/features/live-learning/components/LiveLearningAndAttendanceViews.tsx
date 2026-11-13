@@ -1,11 +1,11 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { RolePanelShell } from '@/features/dashboards/components/RolePanelShell';
-import { useCoursesListQuery } from '@/features/courses/hooks/courses.hook';
+import { useCoursesListQuery, useEnrollmentsListQuery } from '@/features/courses/hooks/courses.hook';
 import {
   useAttendanceSessionsQuery,
   useCreateLiveClassMutation,
@@ -16,7 +16,9 @@ import {
   useLiveClassesQuery,
   useLiveClassParticipantsQuery,
   useManualAttendanceOverrideMutation,
+  useDispatchLowAttendanceAlertsMutation,
   useRecordingsQuery,
+  useSaveWatchProgressMutation,
   useSubmitAttendanceCodeMutation,
   useUpdateAttendanceSessionStatusMutation,
   useUpdateLiveClassStatusMutation,
@@ -44,10 +46,34 @@ import {
   LogOut,
   Plus,
   Edit3,
+  ExternalLink,
 } from 'lucide-react';
 
+declare global {
+  interface Window {
+    JitsiMeetExternalAPI?: new (
+      domain: string,
+      options: {
+        roomName: string;
+        width?: string | number;
+        height?: string | number;
+        parentNode?: HTMLElement | null;
+        userInfo?: {
+          displayName?: string;
+          email?: string;
+        };
+        configOverwrite?: Record<string, unknown>;
+        interfaceConfigOverwrite?: Record<string, unknown>;
+      }
+    ) => {
+      dispose: () => void;
+      executeCommand: (command: string, ...args: unknown[]) => void;
+    };
+  }
+}
+
 // ----------------------------------------------------------------------------
-// ZOD SCHEMAS FOR PHASE 4 FORMS
+// ZOD SCHEMAS FOR PHASE 4 & PHASE 12 FORMS
 // ----------------------------------------------------------------------------
 
 const scheduleLiveClassSchema = z.object({
@@ -56,6 +82,8 @@ const scheduleLiveClassSchema = z.object({
   description: z.string().trim().max(1000).optional(),
   scheduledStartAt: z.string().min(10, 'Start date/time is required'),
   scheduledEndAt: z.string().min(10, 'End date/time is required'),
+  provider: z.enum(['JITSI_MEET', 'YOUTUBE_LIVE', 'HMS_100MS']).default('JITSI_MEET'),
+  youtubeLiveUrlOrId: z.string().trim().max(255).optional(),
 });
 type ScheduleLiveClassValues = z.infer<typeof scheduleLiveClassSchema>;
 
@@ -96,8 +124,424 @@ const manualOverrideSchema = z.object({
 });
 type ManualOverrideValues = z.infer<typeof manualOverrideSchema>;
 
+const JITSI_PUBLIC_SERVERS = [
+  {
+    domain: 'meet.ffmuc.net',
+    label: 'meet.ffmuc.net (Recommended for Localhost — No 5-Min Limit, No Login)',
+  },
+  {
+    domain: 'jitsi.riot.im',
+    label: 'jitsi.riot.im (Community Jitsi — No Credit Card Required)',
+  },
+  {
+    domain: 'meet.jit.si',
+    label: 'meet.jit.si (Official Jitsi Server)',
+  },
+];
+
 // ============================================================================
-// 1. LIVE CLASSES & 100MS ROOM WORKSPACE (ADMIN / TEACHER / STUDENT)
+// INTERACTIVE JITSI MEET IFRAME API (`external_api.js`) & YOUTUBE LIVE STUDIO
+// Zero credit card required; works out-of-the-box on http://localhost:3000 & VPS
+// ============================================================================
+
+function InteractiveJitsiAndYouTubeStudioStage({
+  ticket,
+  role,
+  courseId,
+  onLeave,
+  isLeaving,
+}: {
+  ticket: LiveRoomJoinTicket;
+  role: 'ADMIN' | 'TEACHER' | 'STUDENT';
+  courseId?: string;
+  onLeave: () => void;
+  isLeaving: boolean;
+}) {
+  const jitsiMountRef = useRef<HTMLDivElement | null>(null);
+  const jitsiApiRef = useRef<{
+    dispose: () => void;
+    executeCommand: (cmd: string, ...args: unknown[]) => void;
+  } | null>(null);
+
+  const [selectedJitsiDomain, setSelectedJitsiDomain] = useState<string>(
+    ticket.jitsiDomain || 'meet.ffmuc.net'
+  );
+  const [useDirectIframeFallback, setUseDirectIframeFallback] = useState<boolean>(false);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+
+  // In-room Attendance integration
+  const { data: sessions = [] } = useAttendanceSessionsQuery();
+  const generateCodeMutation = useGenerateAttendanceCodeMutation();
+  const submitCodeMutation = useSubmitAttendanceCodeMutation();
+  const [inRoomGeneratedCode, setInRoomGeneratedCode] = useState<string | null>(null);
+  const [inRoomCodeInput, setInRoomCodeInput] = useState('');
+  const [inRoomAttendanceMsg, setInRoomAttendanceMsg] = useState<string | null>(null);
+
+  const jitsiRoomName =
+    ticket.jitsiRoomName ||
+    `SaamparkLMS_${(ticket.courseCode || 'COURSE').replace(/[^a-zA-Z0-9]/g, '')}_${ticket.providerRoomId.replace(/[^a-zA-Z0-9]/g, '')}`;
+  const displayName =
+    ticket.participantDisplayName ||
+    (role === 'TEACHER' ? 'Course Instructor' : role === 'ADMIN' ? 'Platform Admin' : 'Student');
+  const participantEmail = ticket.participantEmail || '';
+
+  const directJitsiEmbedUrl = `https://${selectedJitsiDomain}/${encodeURIComponent(
+    jitsiRoomName
+  )}#userInfo.displayName="${encodeURIComponent(
+    displayName
+  )}"&config.prejoinPageEnabled=false&config.startWithAudioMuted=${
+    role === 'STUDENT' ? 'true' : 'false'
+  }`;
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setElapsedSeconds((prev) => prev + 1);
+    }, 1000);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  // Load Jitsi Meet IFrame API (`external_api.js`) dynamically when in JITSI_MEET mode
+  useEffect(() => {
+    if (
+      ticket.provider === 'YOUTUBE_LIVE' ||
+      useDirectIframeFallback ||
+      typeof window === 'undefined' ||
+      !jitsiMountRef.current
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const mountJitsiWidget = () => {
+      if (cancelled || !jitsiMountRef.current || !window.JitsiMeetExternalAPI) return;
+      if (jitsiApiRef.current) {
+        try {
+          jitsiApiRef.current.dispose();
+        } catch {
+          // ignore dispose error
+        }
+        jitsiApiRef.current = null;
+      }
+      jitsiMountRef.current.innerHTML = '';
+
+      try {
+        jitsiApiRef.current = new window.JitsiMeetExternalAPI(selectedJitsiDomain, {
+          roomName: jitsiRoomName,
+          width: '100%',
+          height: 500,
+          parentNode: jitsiMountRef.current,
+          userInfo: {
+            displayName,
+            email: participantEmail,
+          },
+          configOverwrite: {
+            prejoinPageEnabled: false,
+            startWithAudioMuted: role === 'STUDENT',
+            startWithVideoMuted: role === 'STUDENT',
+            disableDeepLinking: true,
+          },
+          interfaceConfigOverwrite: {
+            SHOW_JITSI_WATERMARK: false,
+            SHOW_WATERMARK_FOR_GUESTS: false,
+            DEFAULT_REMOTE_DISPLAY_NAME: 'Class Participant',
+          },
+        });
+      } catch {
+        setUseDirectIframeFallback(true);
+      }
+    };
+
+    const scriptId = `jitsi-external-api-${selectedJitsiDomain.replace(/[^a-zA-Z0-9]/g, '-')}`;
+    const existingScript = document.getElementById(scriptId) as HTMLScriptElement | null;
+
+    if (window.JitsiMeetExternalAPI && existingScript) {
+      mountJitsiWidget();
+    } else {
+      const script = document.createElement('script');
+      script.id = scriptId;
+      script.src = `https://${selectedJitsiDomain}/external_api.js`;
+      script.async = true;
+      script.onload = () => mountJitsiWidget();
+      script.onerror = () => setUseDirectIframeFallback(true);
+      document.body.appendChild(script);
+    }
+
+    return () => {
+      cancelled = true;
+      if (jitsiApiRef.current) {
+        try {
+          jitsiApiRef.current.dispose();
+        } catch {
+          // ignore dispose error
+        }
+        jitsiApiRef.current = null;
+      }
+    };
+  }, [
+    ticket.provider,
+    selectedJitsiDomain,
+    jitsiRoomName,
+    displayName,
+    participantEmail,
+    role,
+    useDirectIframeFallback,
+  ]);
+
+  const formatElapsed = (sec: number) => {
+    const m = Math.floor(sec / 60)
+      .toString()
+      .padStart(2, '0');
+    const s = (sec % 60).toString().padStart(2, '0');
+    return `${m}:${s}`;
+  };
+
+  const openSession = sessions.find(
+    (s) => s.status === 'OPEN' && (!courseId || s.courseId === courseId)
+  );
+
+  return (
+    <div className="rounded-2xl border-2 border-emerald-500/60 bg-slate-950 text-white p-5 sm:p-6 shadow-2xl space-y-5">
+      {/* Studio Top Bar */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-4">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <span className="px-3 py-1 rounded-full text-xs font-bold bg-rose-600 text-white flex items-center gap-1.5 animate-pulse">
+            <Radio className="w-3.5 h-3.5" /> LIVE • {formatElapsed(elapsedSeconds)}
+          </span>
+          <span className="px-2.5 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-xs font-bold text-emerald-300">
+            {ticket.provider === 'YOUTUBE_LIVE'
+              ? 'YouTube Live Broadcast'
+              : `Jitsi Meet (${selectedJitsiDomain})`}
+          </span>
+          <span className="px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 text-xs font-mono text-cyan-400">
+            Room: {jitsiRoomName}
+          </span>
+          <span className="px-2.5 py-1 rounded-lg bg-indigo-500/20 text-indigo-300 text-xs font-bold">
+            {displayName} ({ticket.roomRole.toUpperCase()})
+          </span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {ticket.provider !== 'YOUTUBE_LIVE' && (
+            <a
+              href={`https://${selectedJitsiDomain}/${encodeURIComponent(jitsiRoomName)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-3 py-2 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700 inline-flex items-center gap-1.5"
+            >
+              <ExternalLink className="w-3.5 h-3.5" /> Pop Out Fullscreen Tab
+            </a>
+          )}
+
+          <button
+            type="button"
+            disabled={isLeaving}
+            onClick={() => {
+              if (jitsiApiRef.current) {
+                try {
+                  jitsiApiRef.current.dispose();
+                } catch {
+                  // ignore
+                }
+                jitsiApiRef.current = null;
+              }
+              onLeave();
+            }}
+            className="px-4 py-2 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white flex items-center gap-1.5 cursor-pointer"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            {isLeaving ? 'Leaving & Logging Duration...' : 'Leave Classroom & Save Attendance'}
+          </button>
+        </div>
+      </div>
+
+      {/* Localhost Jitsi Server Switcher Bar (for JITSI_MEET sessions) */}
+      {ticket.provider !== 'YOUTUBE_LIVE' && (
+        <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-bold text-slate-300">Jitsi Server (Localhost &amp; VPS Ready):</span>
+            <select
+              value={selectedJitsiDomain}
+              onChange={(e) => {
+                setUseDirectIframeFallback(false);
+                setSelectedJitsiDomain(e.target.value);
+              }}
+              className="px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-cyan-300 font-mono text-xs"
+            >
+              {JITSI_PUBLIC_SERVERS.map((srv) => (
+                <option key={srv.domain} value={srv.domain}>
+                  {srv.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setUseDirectIframeFallback((v) => !v)}
+            className="px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-[11px] font-semibold cursor-pointer"
+          >
+            {useDirectIframeFallback
+              ? 'Switch to Jitsi External API Mode'
+              : 'Switch to Direct IFrame Embed'}
+          </button>
+        </div>
+      )}
+
+      {/* Main Embedded Classroom Stage (2/3) + In-Room Live Attendance Sidebar (1/3) */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 items-start">
+        <div className="lg:col-span-2 rounded-2xl bg-black border border-slate-800 overflow-hidden shadow-inner">
+          {ticket.provider === 'YOUTUBE_LIVE' && ticket.youtubeEmbedUrl ? (
+            <div className="aspect-video w-full bg-black">
+              <iframe
+                src={ticket.youtubeEmbedUrl}
+                title={ticket.title}
+                className="w-full h-full border-0"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+                allowFullScreen
+              />
+            </div>
+          ) : useDirectIframeFallback ? (
+            <iframe
+              src={directJitsiEmbedUrl}
+              title={`Jitsi Classroom — ${ticket.title}`}
+              className="w-full h-[500px] border-0"
+              allow="camera; microphone; display-capture; fullscreen; autoplay; clipboard-write"
+              allowFullScreen
+            />
+          ) : (
+            <div
+              ref={jitsiMountRef}
+              className="w-full min-h-[500px] bg-slate-950 flex items-center justify-center text-xs text-slate-400"
+            >
+              Loading Jitsi Meet Interactive Classroom ({selectedJitsiDomain}/{jitsiRoomName})...
+            </div>
+          )}
+        </div>
+
+        {/* 1/3 Sidebar: In-Room Live Attendance Verification & Session Info */}
+        <div className="rounded-2xl bg-slate-900 border border-slate-800 p-4 flex flex-col justify-between space-y-4 text-xs">
+          <div className="space-y-3">
+            <h4 className="font-bold text-sm flex items-center gap-1.5 text-cyan-400">
+              <KeyRound className="w-4 h-4" /> In-Room Live Attendance
+            </h4>
+
+            {role === 'TEACHER' || role === 'ADMIN' ? (
+              <div className="space-y-2.5">
+                <p className="text-slate-400 text-[11px]">
+                  Generate an instant 6-digit attendance code for students currently inside this live session:
+                </p>
+                {courseId ? (
+                  <button
+                    type="button"
+                    disabled={generateCodeMutation.isPending}
+                    onClick={() =>
+                      generateCodeMutation.mutate(
+                        {
+                          courseId,
+                          liveClassId: ticket.liveClassId,
+                          expiryMinutes: 15,
+                        },
+                        {
+                          onSuccess: (res) => {
+                            setInRoomGeneratedCode(res.generatedCode);
+                            setInRoomAttendanceMsg(
+                              `6-digit code ${res.generatedCode} active for 15 minutes.`
+                            );
+                          },
+                        }
+                      )
+                    }
+                    className="w-full py-2 px-3 rounded-xl font-bold bg-gradient-to-r from-indigo-500 to-cyan-500 text-white cursor-pointer"
+                  >
+                    {generateCodeMutation.isPending
+                      ? 'Generating Code...'
+                      : '⚡ Broadcast 6-Digit Attendance Code'}
+                  </button>
+                ) : null}
+
+                {inRoomGeneratedCode && (
+                  <div className="p-3 rounded-xl bg-emerald-950/80 border border-emerald-500/40 text-center">
+                    <span className="text-[10px] uppercase font-bold text-emerald-300">
+                      Share With Class Now
+                    </span>
+                    <p className="text-2xl font-mono font-extrabold tracking-widest text-emerald-400 mt-0.5">
+                      {inRoomGeneratedCode}
+                    </p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                <p className="text-slate-400 text-[11px]">
+                  Enter the 6-digit code shared by your instructor to mark your live attendance without leaving the room:
+                </p>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    maxLength={6}
+                    value={inRoomCodeInput}
+                    onChange={(e) => setInRoomCodeInput(e.target.value.replace(/\D/g, ''))}
+                    placeholder="6-digit code"
+                    className="flex-1 px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-700 font-mono tracking-widest text-white"
+                  />
+                  <button
+                    type="button"
+                    disabled={
+                      inRoomCodeInput.length !== 6 ||
+                      !openSession ||
+                      submitCodeMutation.isPending
+                    }
+                    onClick={() => {
+                      if (!openSession) return;
+                      submitCodeMutation.mutate(
+                        { sessionId: openSession.id, code: inRoomCodeInput },
+                        {
+                          onSuccess: () => {
+                            setInRoomAttendanceMsg('Attendance marked PRESENT ✓');
+                            setInRoomCodeInput('');
+                          },
+                        }
+                      );
+                    }}
+                    className="px-3 py-1.5 rounded-xl font-bold bg-emerald-600 text-white cursor-pointer disabled:opacity-50"
+                  >
+                    Verify
+                  </button>
+                </div>
+                {!openSession && (
+                  <p className="text-[11px] text-amber-400">
+                    Waiting for instructor to open today&apos;s attendance code window.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {inRoomAttendanceMsg && (
+              <div className="p-2.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-semibold text-[11px]">
+                {inRoomAttendanceMsg}
+              </div>
+            )}
+          </div>
+
+          <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5 text-[11px]">
+            <p className="text-emerald-400 font-semibold flex items-center gap-1">
+              <ShieldCheck className="w-3.5 h-3.5" /> Zero-Card WebRTC Classroom
+            </p>
+            <p className="text-slate-400">
+              Allow browser camera &amp; microphone permissions when prompted. Your join and leave timestamps are automatically logged in MySQL.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// 1. LIVE CLASSES & JITSI MEET / YOUTUBE LIVE WORKSPACE (ADMIN / TEACHER / STUDENT)
 // ============================================================================
 
 export function RoleLiveClassesView({
@@ -120,6 +564,7 @@ export function RoleLiveClassesView({
   const leaveClassMutation = useLeaveLiveClassMutation();
 
   const [activeTicket, setActiveTicket] = useState<LiveRoomJoinTicket | null>(null);
+  const [activeCourseId, setActiveCourseId] = useState<string>('');
   const [selectedLogClassId, setSelectedLogClassId] = useState<string>('');
   const { data: participants = [] } = useLiveClassParticipantsQuery(selectedLogClassId);
 
@@ -133,31 +578,34 @@ export function RoleLiveClassesView({
       description: '',
       scheduledStartAt: defaultStart,
       scheduledEndAt: defaultEnd,
+      provider: 'JITSI_MEET',
+      youtubeLiveUrlOrId: '',
     },
   });
 
+  const selectedProvider = scheduleForm.watch('provider');
   const canSchedule = role === 'ADMIN' || role === 'TEACHER';
 
   return (
     <RolePanelShell
       role={role}
       operatorName={`${role} Live Classroom`}
-      operatorSubtitle="100ms Provider Adapter (HMS_100MS)"
+      operatorSubtitle="Jitsi Meet IFrame API & YouTube Live (Zero Card)"
       headerTitle={
         role === 'STUDENT'
-          ? 'Live Classes & 100ms Interactive Rooms'
-          : 'Live Class Scheduling, 100ms Rooms & Participant Logs'
+          ? 'Live Classes & Interactive Jitsi Classroom'
+          : 'Live Class Scheduling, Jitsi / YouTube Studio & Participant Logs'
       }
     >
       <div className="space-y-6">
-        {/* Schedule New 100ms Live Class (Admin & Assigned Teacher) */}
+        {/* Schedule New Jitsi Meet or YouTube Live Class (Admin & Assigned Teacher) */}
         {canSchedule && (
           <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] p-6 shadow-sm">
             <h2 className="text-sm font-bold mb-1 flex items-center gap-2">
-              <Plus className="w-4 h-4 text-emerald-500" /> Schedule 100ms Live Classroom (`POST /api/v1/live-classes`)
+              <Plus className="w-4 h-4 text-emerald-500" /> Schedule Live Classroom (`POST /api/v1/live-classes` — Jitsi Meet or YouTube Live)
             </h2>
             <p className="text-xs text-slate-500 mb-4">
-              Automatically provisions an isolated `HMS_100MS` room ID and logs an audit entry.
+              Provisions an embedded <strong>Jitsi Meet</strong> interactive classroom (₹0 cost, no credit card, works on <code>localhost:3000</code> and Hostinger VPS) or an <strong>Unlisted YouTube Live</strong> broadcast, and notifies enrolled students via Email + WhatsApp.
             </p>
 
             <form
@@ -169,6 +617,9 @@ export function RoleLiveClassesView({
                     description: vals.description,
                     scheduledStartAt: new Date(vals.scheduledStartAt).toISOString(),
                     scheduledEndAt: new Date(vals.scheduledEndAt).toISOString(),
+                    provider: vals.provider,
+                    youtubeLiveUrlOrId:
+                      vals.provider === 'YOUTUBE_LIVE' ? vals.youtubeLiveUrlOrId : undefined,
                   },
                   {
                     onSuccess: () =>
@@ -178,6 +629,8 @@ export function RoleLiveClassesView({
                         description: '',
                         scheduledStartAt: defaultStart,
                         scheduledEndAt: defaultEnd,
+                        provider: vals.provider,
+                        youtubeLiveUrlOrId: '',
                       }),
                   }
                 )
@@ -204,7 +657,7 @@ export function RoleLiveClassesView({
                 )}
               </div>
 
-              <div className="md:col-span-2">
+              <div>
                 <label className="block text-xs font-semibold mb-1">Session Title</label>
                 <input
                   type="text"
@@ -213,6 +666,35 @@ export function RoleLiveClassesView({
                   className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700"
                 />
               </div>
+
+              <div>
+                <label className="block text-xs font-semibold mb-1">Live Video Provider</label>
+                <select
+                  {...scheduleForm.register('provider')}
+                  className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700 font-semibold"
+                >
+                  <option value="JITSI_MEET">
+                    Jitsi Meet Interactive Room (Free • No Card • Localhost Ready)
+                  </option>
+                  <option value="YOUTUBE_LIVE">
+                    YouTube Live Broadcast (Unlisted 11-Char Video ID / URL)
+                  </option>
+                </select>
+              </div>
+
+              {selectedProvider === 'YOUTUBE_LIVE' && (
+                <div className="md:col-span-3">
+                  <label className="block text-xs font-semibold mb-1">
+                    YouTube Live Video ID or Watch URL
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. M7lc1UVf-VE or https://www.youtube.com/watch?v=M7lc1UVf-VE"
+                    {...scheduleForm.register('youtubeLiveUrlOrId')}
+                    className="w-full px-3 py-2 rounded-xl text-xs font-mono bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-700"
+                  />
+                </div>
+              )}
 
               <div>
                 <label className="block text-xs font-semibold mb-1">Start Time</label>
@@ -236,10 +718,10 @@ export function RoleLiveClassesView({
                 <button
                   type="submit"
                   disabled={createLiveMutation.isPending}
-                  className="w-full py-2 px-4 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-indigo-500 to-cyan-500"
+                  className="w-full py-2 px-4 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-indigo-500 to-cyan-500 cursor-pointer"
                 >
                   {createLiveMutation.isPending
-                    ? 'Provisioning 100ms Room...'
+                    ? 'Provisioning Classroom...'
                     : '+ Schedule Live Class'}
                 </button>
               </div>
@@ -247,55 +729,31 @@ export function RoleLiveClassesView({
           </div>
         )}
 
-        {/* Active 100ms Classroom Token Stage */}
+        {/* Active Jitsi Meet / YouTube Live Interactive Classroom Studio Stage */}
         {activeTicket && (
-          <div className="rounded-2xl border-2 border-emerald-500/60 bg-slate-900 text-white p-6 shadow-xl space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2.5">
-                <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-rose-500 text-white flex items-center gap-1.5 animate-pulse">
-                  <Radio className="w-3.5 h-3.5" /> 100MS LIVE ROOM CONNECTED
-                </span>
-                <span className="text-xs font-mono text-cyan-400">
-                  Room ID: {activeTicket.providerRoomId} • Role: {activeTicket.roomRole}
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  leaveClassMutation.mutate(activeTicket.liveClassId, {
-                    onSuccess: () => setActiveTicket(null),
-                  });
-                }}
-                className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white flex items-center gap-1.5"
-              >
-                <LogOut className="w-3.5 h-3.5" /> Leave Classroom & Log Duration
-              </button>
-            </div>
-
-            <div>
-              <h3 className="text-lg font-extrabold">{activeTicket.title}</h3>
-              <p className="text-xs text-slate-300">{activeTicket.courseTitle}</p>
-            </div>
-
-            <div className="p-3.5 rounded-xl bg-slate-950/90 border border-slate-800 text-xs font-mono space-y-1">
-              <p className="text-emerald-400 font-sans font-semibold flex items-center gap-1.5">
-                <ShieldCheck className="w-4 h-4" /> Server-Generated Short-Lived 100ms Room Token (Expires: {activeTicket.expiresAt})
-              </p>
-              <p className="break-all text-[11px] text-slate-400">{activeTicket.token}</p>
-            </div>
-          </div>
+          <InteractiveJitsiAndYouTubeStudioStage
+            ticket={activeTicket}
+            role={role}
+            courseId={activeCourseId}
+            isLeaving={leaveClassMutation.isPending}
+            onLeave={() => {
+              leaveClassMutation.mutate(activeTicket.liveClassId, {
+                onSuccess: () => setActiveTicket(null),
+              });
+            }}
+          />
         )}
 
         {/* Live Classes List */}
         <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] p-6 shadow-sm">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-sm font-bold flex items-center gap-2">
-              <Video className="w-4 h-4 text-cyan-500" /> Scheduled & Active Live Classes (`GET /api/v1/live-classes`)
+              <Video className="w-4 h-4 text-cyan-500" /> Scheduled &amp; Active Live Classes (`GET /api/v1/live-classes`)
             </h2>
             <button
               type="button"
               onClick={() => void refetch()}
-              className="px-3 py-1.5 rounded-xl text-xs border border-slate-200 dark:border-slate-700 flex items-center gap-1"
+              className="px-3 py-1.5 rounded-xl text-xs border border-slate-200 dark:border-slate-700 flex items-center gap-1 cursor-pointer"
             >
               <RefreshCw className="w-3.5 h-3.5" /> Refresh
             </button>
@@ -337,8 +795,11 @@ export function RoleLiveClassesView({
                     >
                       {lc.status}
                     </span>
+                    <span className="px-2 py-0.5 rounded bg-violet-500/15 text-violet-400 text-[10px] font-mono font-bold">
+                      {lc.provider === 'YOUTUBE_LIVE' ? 'YOUTUBE_LIVE' : 'JITSI_MEET'}
+                    </span>
                     <span className="text-xs text-slate-500">
-                      Room: <code className="font-mono">{lc.providerRoomId || 'Pending'}</code>
+                      Room: <code className="font-mono">{lc.providerRoomId || 'Ready'}</code>
                     </span>
                   </div>
                   <h3 className="text-sm font-bold">{lc.title}</h3>
@@ -356,15 +817,18 @@ export function RoleLiveClassesView({
                   {lc.status !== 'ENDED' && lc.status !== 'CANCELLED' && (
                     <button
                       type="button"
-                      onClick={() =>
+                      onClick={() => {
+                        setActiveCourseId(lc.courseId);
                         joinTokenMutation.mutate(lc.id, {
                           onSuccess: (ticket) => setActiveTicket(ticket),
-                        })
-                      }
+                        });
+                      }}
                       disabled={joinTokenMutation.isPending}
-                      className="px-3.5 py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-emerald-500 to-cyan-500 shadow"
+                      className="px-3.5 py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-emerald-500 to-cyan-500 shadow cursor-pointer"
                     >
-                      {role === 'STUDENT' ? 'Join 100ms Classroom' : 'Launch 100ms Host Room'}
+                      {role === 'STUDENT'
+                        ? '🎥 Join Live Classroom (Jitsi / Live)'
+                        : '🎥 Launch Host Classroom (Jitsi / Live)'}
                     </button>
                   )}
 
@@ -379,7 +843,7 @@ export function RoleLiveClassesView({
                               status: 'LIVE',
                             })
                           }
-                          className="px-3 py-1.5 rounded-xl text-xs font-bold bg-indigo-600 text-white"
+                          className="px-3 py-1.5 rounded-xl text-xs font-bold bg-indigo-600 text-white cursor-pointer"
                         >
                           Mark LIVE
                         </button>
@@ -393,7 +857,7 @@ export function RoleLiveClassesView({
                               status: 'ENDED',
                             })
                           }
-                          className="px-3 py-1.5 rounded-xl text-xs font-bold bg-amber-600 text-white"
+                          className="px-3 py-1.5 rounded-xl text-xs font-bold bg-amber-600 text-white cursor-pointer"
                         >
                           End Session
                         </button>
@@ -401,7 +865,7 @@ export function RoleLiveClassesView({
                       <button
                         type="button"
                         onClick={() => setSelectedLogClassId(lc.id)}
-                        className="px-3 py-1.5 rounded-xl text-xs font-semibold border border-slate-200 dark:border-slate-700"
+                        className="px-3 py-1.5 rounded-xl text-xs font-semibold border border-slate-200 dark:border-slate-700 cursor-pointer"
                       >
                         Participant Logs ({lc.participantCount})
                       </button>
@@ -459,7 +923,7 @@ export function RoleLiveClassesView({
 }
 
 // ============================================================================
-// 2. YOUTUBE RECORDED CLASSES VIEW (TEACHER & STUDENT — C-022)
+// 2. YOUTUBE RECORDED CLASSES VIEW (COURSE-SCOPED PLAYLIST & CLEAN YOUTUBE PLAYER)
 // ============================================================================
 
 export function RoleRecordedClassesView({
@@ -468,21 +932,71 @@ export function RoleRecordedClassesView({
   role: 'TEACHER' | 'STUDENT';
 }) {
   const { data: coursesData } = useCoursesListQuery();
+  const { data: enrollments = [] } = useEnrollmentsListQuery();
   const { data: liveClasses = [] } = useLiveClassesQuery();
-  const { data: recordings = [], isLoading, isError, error } = useRecordingsQuery();
+
+  const [selectedCourseId, setSelectedCourseId] = useState<string>('');
+  const [urlInitialized, setUrlInitialized] = useState<boolean>(false);
+  const [selectedRecId, setSelectedRecId] = useState<string>('');
+
+  // Read ?courseId=... from URL on mount
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const cid = params.get('courseId');
+      if (cid) {
+        setSelectedCourseId(cid);
+      }
+      setUrlInitialized(true);
+    }
+  }, []);
+
+  // Build the list of courses available to filter by
+  const courseOptions =
+    role === 'STUDENT' && enrollments.length > 0
+      ? enrollments.map((e) => ({
+          id: e.courseId,
+          code: e.courseCode,
+          title: e.courseTitle,
+        }))
+      : (coursesData?.items || []).map((c) => ({
+          id: c.id,
+          code: c.code,
+          title: c.title,
+        }));
+
+  // Default to the first enrolled/assigned course if none was specified in the URL
+  const effectiveCourseId =
+    selectedCourseId === 'ALL'
+      ? ''
+      : selectedCourseId || (urlInitialized && courseOptions[0]?.id ? courseOptions[0].id : '');
+
+  const {
+    data: allRecordings = [],
+    isLoading,
+    isError,
+    error,
+  } = useRecordingsQuery(effectiveCourseId ? { courseId: effectiveCourseId } : undefined);
+
+  // Strictly filter client-side as well so switching courses immediately scopes the playlist
+  const recordings = effectiveCourseId
+    ? allRecordings.filter((r) => r.courseId === effectiveCourseId)
+    : allRecordings;
 
   const createRecMutation = useCreateRecordingMutation();
   const updateRecStatusMutation = useUpdateRecordingStatusMutation();
+  const saveProgressMutation = useSaveWatchProgressMutation();
 
-  const [selectedRecId, setSelectedRecId] = useState<string>('');
   const activeRecording =
     recordings.find((r) => r.id === selectedRecId) || recordings[0] || null;
+
+  const activeCourseMeta = courseOptions.find((c) => c.id === effectiveCourseId) || null;
 
   const recForm = useForm<CreateRecordingValues>({
     resolver: zodResolver(createRecordingSchema),
     defaultValues: {
       title: '',
-      youtubeUrlOrId: 'M7lc1UVf-VE',
+      youtubeUrlOrId: '',
       durationSeconds: 2700,
     },
   });
@@ -491,17 +1005,69 @@ export function RoleRecordedClassesView({
     <RolePanelShell
       role={role}
       operatorName={`${role} Recorded Library`}
-      operatorSubtitle="Server-Validated YouTube Safe Embeds (C-022)"
-      headerTitle="Recorded Classes & On-Demand Video Library"
+      operatorSubtitle="Course-Scoped Video Lectures"
+      headerTitle={
+        activeCourseMeta
+          ? `Recorded Videos — ${activeCourseMeta.title}`
+          : 'Recorded Classes & Video Library'
+      }
     >
       <div className="space-y-6">
+        {/* Course Selector Filter Bar so selecting a course shows ONLY that course's recorded videos */}
+        {courseOptions.length > 0 && (
+          <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] p-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-bold text-slate-500 mr-1">Select Course:</span>
+              {courseOptions.map((c) => {
+                const isSelected = effectiveCourseId === c.id;
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedCourseId(c.id);
+                      setSelectedRecId('');
+                    }}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
+                      isSelected
+                        ? 'bg-violet-600 text-white shadow-sm'
+                        : 'bg-slate-100 dark:bg-slate-900 text-slate-700 dark:text-slate-300 hover:border-violet-500/50 border border-transparent'
+                    }`}
+                  >
+                    {c.code} — {c.title}
+                  </button>
+                );
+              })}
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedCourseId('ALL');
+                  setSelectedRecId('');
+                }}
+                className={`px-3 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${
+                  selectedCourseId === 'ALL'
+                    ? 'bg-slate-800 text-white dark:bg-white dark:text-slate-900'
+                    : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                All Courses
+              </button>
+            </div>
+
+            <span className="text-xs font-semibold text-slate-400">
+              Showing {recordings.length} video(s)
+              {activeCourseMeta ? ` for ${activeCourseMeta.code}` : ''}
+            </span>
+          </div>
+        )}
+
         {role === 'TEACHER' && (
           <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] p-6 shadow-sm">
             <h2 className="text-sm font-bold mb-1 flex items-center gap-2">
-              <PlayCircle className="w-4 h-4 text-indigo-500" /> Publish YouTube Class Recording (`POST /api/v1/recordings`)
+              <PlayCircle className="w-4 h-4 text-indigo-500" /> Publish YouTube Class Recording
             </h2>
             <p className="text-xs text-slate-500 mb-4">
-              Stores only the validated 11-character YouTube Video ID and renders via `youtube-nocookie.com` (raw iframe HTML is blocked per C-022).
+              Select the target course and paste a YouTube Video ID or Watch URL to publish a recorded lecture.
             </p>
 
             <form
@@ -516,13 +1082,15 @@ export function RoleRecordedClassesView({
                     status: 'PUBLISHED',
                   },
                   {
-                    onSuccess: () =>
+                    onSuccess: () => {
+                      setSelectedCourseId(vals.courseId);
                       recForm.reset({
                         courseId: vals.courseId,
                         title: '',
                         youtubeUrlOrId: '',
                         durationSeconds: 2700,
-                      }),
+                      });
+                    },
                   }
                 )
               )}
@@ -569,7 +1137,7 @@ export function RoleRecordedClassesView({
                 <button
                   type="submit"
                   disabled={createRecMutation.isPending}
-                  className="px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 text-white shrink-0"
+                  className="px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 text-white shrink-0 cursor-pointer"
                 >
                   Publish
                 </button>
@@ -578,20 +1146,86 @@ export function RoleRecordedClassesView({
           </div>
         )}
 
-        {/* Privacy-Enhanced YouTube Player + Recording Playlist */}
+        {/* Clean Unobstructed YouTube Player + Course-Filtered Recording Playlist */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] p-6 shadow-sm space-y-4">
             {activeRecording ? (
               <>
-                <div className="aspect-video w-full rounded-xl overflow-hidden bg-slate-950 border border-slate-800">
+                <div className="relative aspect-video w-full rounded-xl overflow-hidden bg-slate-950 border border-slate-800">
                   <iframe
-                    src={activeRecording.safeEmbedUrl}
+                    key={activeRecording.id}
+                    src={`https://www.youtube.com/embed/${activeRecording.youtubeVideoId}?rel=0&modestbranding=1`}
                     title={activeRecording.title}
                     className="w-full h-full"
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    referrerPolicy="strict-origin-when-cross-origin"
                     allowFullScreen
                   />
                 </div>
+
+                {/* Watch Progress & Bookmark Bar (No moving overlay on video screen) */}
+                <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-cyan-500">
+                        {activeRecording.courseCode} — {activeRecording.courseTitle}
+                      </span>
+                      {activeRecording.myWatchProgress && (
+                        <span className="px-2 py-0.5 rounded bg-indigo-500/15 text-indigo-400 font-mono text-[11px] font-bold">
+                          Watched: {activeRecording.myWatchProgress.completionPercent}%
+                        </span>
+                      )}
+                    </div>
+                    {role === 'TEACHER' && activeRecording.watchAnalytics && (
+                      <p className="text-[11px] text-slate-500">
+                        Cohort Telemetry: {activeRecording.watchAnalytics.uniqueViewersCount} unique student viewer(s) •{' '}
+                        {activeRecording.watchAnalytics.completedViewersCount} completed •{' '}
+                        {activeRecording.watchAnalytics.averageCompletionPercent}% avg completion
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={saveProgressMutation.isPending}
+                      onClick={() =>
+                        saveProgressMutation.mutate({
+                          recordingId: activeRecording.id,
+                          lastPositionSeconds: Math.min(
+                            activeRecording.durationSeconds || 1800,
+                            (activeRecording.myWatchProgress?.lastPositionSeconds || 0) + 300
+                          ),
+                          watchedSeconds: Math.min(
+                            activeRecording.durationSeconds || 1800,
+                            (activeRecording.myWatchProgress?.watchedSeconds || 0) + 300
+                          ),
+                          completed: false,
+                        })
+                      }
+                      className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 font-semibold hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                    >
+                      Save Progress (+5m)
+                    </button>
+                    <button
+                      type="button"
+                      disabled={saveProgressMutation.isPending}
+                      onClick={() =>
+                        saveProgressMutation.mutate({
+                          recordingId: activeRecording.id,
+                          lastPositionSeconds: activeRecording.durationSeconds || 1800,
+                          watchedSeconds: activeRecording.durationSeconds || 1800,
+                          completed: true,
+                        })
+                      }
+                      className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-bold cursor-pointer"
+                    >
+                      {activeRecording.myWatchProgress?.completed
+                        ? '✓ Completed (100%)'
+                        : 'Mark Lecture Completed'}
+                    </button>
+                  </div>
+                </div>
+
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <span className="px-2 py-0.5 rounded bg-cyan-500/15 text-cyan-400 text-[11px] font-mono font-bold">
@@ -613,7 +1247,7 @@ export function RoleRecordedClassesView({
                             activeRecording.status === 'PUBLISHED' ? 'ARCHIVED' : 'PUBLISHED',
                         })
                       }
-                      className="px-3 py-1.5 rounded-xl text-xs font-bold border border-slate-300 dark:border-slate-700"
+                      className="px-3 py-1.5 rounded-xl text-xs font-bold border border-slate-300 dark:border-slate-700 cursor-pointer"
                     >
                       Status: {activeRecording.status} (Toggle)
                     </button>
@@ -621,44 +1255,62 @@ export function RoleRecordedClassesView({
                 </div>
               </>
             ) : (
-              <p className="text-xs text-slate-500 py-12 text-center">
-                {isLoading
-                  ? 'Loading recorded classes from MySQL...'
-                  : 'No recorded classes published yet for your courses.'}
-              </p>
+              <div className="py-16 text-center space-y-2">
+                <PlayCircle className="w-8 h-8 text-slate-500 mx-auto" />
+                <p className="text-sm font-bold text-slate-300">
+                  {isLoading
+                    ? 'Loading recorded classes...'
+                    : activeCourseMeta
+                    ? `No recorded videos uploaded for "${activeCourseMeta.title}" (${activeCourseMeta.code}) yet.`
+                    : 'No recorded classes published yet for your courses.'}
+                </p>
+                {activeCourseMeta && (
+                  <p className="text-xs text-slate-500">
+                    Select another course above or check back once your instructor publishes a recording for {activeCourseMeta.code}.
+                  </p>
+                )}
+              </div>
             )}
           </div>
 
           <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] p-5 shadow-sm space-y-3">
             <h3 className="text-sm font-bold">
-              Course Recordings (`GET /api/v1/recordings` — {recordings.length})
+              {activeCourseMeta
+                ? `${activeCourseMeta.code} Video Playlist (${recordings.length})`
+                : `Course Video Playlist (${recordings.length})`}
             </h3>
             {isError && (
               <p className="text-xs text-rose-500">
                 {(error as { message?: string })?.message || 'Failed to load recordings.'}
               </p>
             )}
-            <div className="space-y-2.5 max-h-[420px] overflow-y-auto pr-1">
-              {recordings.map((rec) => (
-                <button
-                  key={rec.id}
-                  type="button"
-                  onClick={() => setSelectedRecId(rec.id)}
-                  className={`w-full text-left p-3.5 rounded-xl border transition ${
-                    activeRecording?.id === rec.id
-                      ? 'border-violet-500 bg-violet-500/10'
-                      : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-900'
-                  }`}
-                >
-                  <div className="flex items-center justify-between text-[11px] text-slate-400">
-                    <span className="font-mono text-cyan-400">{rec.courseCode}</span>
-                    <span>{Math.round(rec.durationSeconds / 60)}m</span>
-                  </div>
-                  <p className="text-xs font-bold mt-1">{rec.title}</p>
-                  <p className="text-[11px] text-slate-500 truncate">{rec.courseTitle}</p>
-                </button>
-              ))}
-            </div>
+            {recordings.length === 0 && !isLoading ? (
+              <p className="text-xs text-slate-500 py-6 text-center">
+                No videos in this course playlist yet.
+              </p>
+            ) : (
+              <div className="space-y-2.5 max-h-[420px] overflow-y-auto pr-1">
+                {recordings.map((rec) => (
+                  <button
+                    key={rec.id}
+                    type="button"
+                    onClick={() => setSelectedRecId(rec.id)}
+                    className={`w-full text-left p-3.5 rounded-xl border transition cursor-pointer ${
+                      activeRecording?.id === rec.id
+                        ? 'border-violet-500 bg-violet-500/10'
+                        : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-900'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between text-[11px] text-slate-400">
+                      <span className="font-mono text-cyan-400">{rec.courseCode}</span>
+                      <span>{Math.round(rec.durationSeconds / 60)}m</span>
+                    </div>
+                    <p className="text-xs font-bold mt-1">{rec.title}</p>
+                    <p className="text-[11px] text-slate-500 truncate">{rec.courseTitle}</p>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -678,6 +1330,7 @@ export function TeacherAttendanceWorkspaceView() {
   const generateCodeMutation = useGenerateAttendanceCodeMutation();
   const overrideMutation = useManualAttendanceOverrideMutation();
   const updateStatusMutation = useUpdateAttendanceSessionStatusMutation();
+  const lowAttendanceAlertMutation = useDispatchLowAttendanceAlertsMutation();
 
   const [latestGenerated, setLatestGenerated] =
     useState<GeneratedAttendanceCodeResult | null>(null);
@@ -855,7 +1508,19 @@ export function TeacherAttendanceWorkspaceView() {
                       <strong>{activeSession.status}</strong>
                     </p>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      disabled={lowAttendanceAlertMutation.isPending}
+                      onClick={() =>
+                        lowAttendanceAlertMutation.mutate({ courseId: activeSession.courseId })
+                      }
+                      className="px-3 py-1.5 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white cursor-pointer"
+                    >
+                      {lowAttendanceAlertMutation.isPending
+                        ? 'Scanning <75% Roster...'
+                        : '⚠️ Send <75% Low-Attendance Alerts'}
+                    </button>
                     {activeSession.status === 'OPEN' && (
                       <button
                         type="button"
@@ -1048,7 +1713,7 @@ export function StudentAttendanceView() {
 
           <div className="lg:col-span-2 rounded-2xl border border-violet-500/40 bg-white dark:bg-[#131127] p-6 space-y-4">
             <h2 className="text-sm font-bold flex items-center gap-2">
-              <KeyRound className="w-4 h-4 text-violet-400" /> Submit 6-Digit Session Attendance Code (`POST /api/v1/attendance/sessions/:id/submit-code`)
+              <KeyRound className="w-4 h-4 text-violet-400" /> Attendance Check-In (Enter 6-Digit Class Code)
             </h2>
             <p className="text-xs text-slate-500">
               Enter the 6-digit code announced by your instructor during the live session. Rate-limited to 5 attempts/minute.
@@ -1106,7 +1771,7 @@ export function StudentAttendanceView() {
         {/* Student's Attendance Ledger */}
         <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131127] p-6">
           <h3 className="text-sm font-bold mb-4 flex items-center gap-2">
-            <Clock className="w-4 h-4 text-cyan-400" /> Your Session Attendance History (`GET /api/v1/attendance/sessions`)
+            <Clock className="w-4 h-4 text-cyan-400" /> Your Attendance History
           </h3>
           {isLoading && <p className="text-xs text-slate-500">Loading your attendance records...</p>}
           <div className="overflow-x-auto">

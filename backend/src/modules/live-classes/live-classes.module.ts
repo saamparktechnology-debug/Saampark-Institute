@@ -12,13 +12,39 @@ import {
   authorizeRoles,
 } from '../../middlewares/auth.middleware';
 import { validateRequest } from '../../middlewares/validate.middleware';
-import { Hms100msVideoAdapter } from '../../integrations/providers.adapter';
+import { OmnichannelMessagingService } from '../../integrations/messaging.adapter';
+import {
+  Hms100msVideoAdapter,
+  JitsiVideoAdapter,
+} from '../../integrations/providers.adapter';
 
 const hmsAdapter = new Hms100msVideoAdapter(
   process.env.HMS_100MS_ACCESS_KEY || 'hms_access_key_placeholder',
   process.env.HMS_100MS_APP_SECRET || 'hms_app_secret_placeholder_32_chars',
   process.env.HMS_100MS_WEBHOOK_SECRET || 'hms_webhook_secret_placeholder'
 );
+
+const jitsiAdapter = new JitsiVideoAdapter(
+  process.env.JITSI_DOMAIN || 'meet.ffmuc.net',
+  process.env.JITSI_APP_SECRET || 'saampark_jitsi_room_secret_key'
+);
+
+function extractYouTubeLiveId(rawInput?: string | null): string | null {
+  if (!rawInput) return null;
+  const trimmed = rawInput.trim();
+  if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) return trimmed;
+  try {
+    const parsed = new URL(trimmed);
+    const v = parsed.searchParams.get('v');
+    if (v && /^[a-zA-Z0-9_-]{11}$/.test(v)) return v;
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    const candidate = segments[segments.length - 1];
+    if (candidate && /^[a-zA-Z0-9_-]{11}$/.test(candidate)) return candidate;
+  } catch {
+    // Not a full URL
+  }
+  return null;
+}
 
 // ----------------------------------------------------------------------------
 // VALIDATION SCHEMAS
@@ -32,6 +58,11 @@ export const createLiveClassValidation = {
     description: z.string().trim().max(1000).optional(),
     scheduledStartAt: z.string().datetime({ offset: true }).or(z.string().min(10)),
     scheduledEndAt: z.string().datetime({ offset: true }).or(z.string().min(10)),
+    provider: z
+      .enum(['JITSI_MEET', 'YOUTUBE_LIVE', 'HMS_100MS'])
+      .optional()
+      .default('JITSI_MEET'),
+    youtubeLiveUrlOrId: z.string().trim().max(255).optional().nullable(),
   }),
 };
 
@@ -76,10 +107,17 @@ export interface LiveClassDto {
 export interface LiveRoomJoinTicketDto {
   liveClassId: string;
   courseTitle: string;
+  courseCode: string;
   title: string;
-  provider: 'HMS_100MS';
+  provider: 'JITSI_MEET' | 'YOUTUBE_LIVE' | 'HMS_100MS';
   providerRoomId: string;
+  jitsiDomain: string;
+  jitsiRoomName: string;
+  embedUrl: string;
+  youtubeEmbedUrl: string | null;
   roomRole: 'host' | 'co-host' | 'guest-student';
+  participantDisplayName: string;
+  participantEmail: string;
   token: string;
   expiresAt: string;
   participantId: string;
@@ -151,7 +189,10 @@ export class LiveClassesService {
       description: lc.description,
       scheduledStartAt: lc.scheduledStartAt.toISOString(),
       scheduledEndAt: lc.scheduledEndAt.toISOString(),
-      provider: lc.provider,
+      provider:
+        lc.provider === 'HMS_100MS' && !hmsAdapter.isLive100msConfigured()
+          ? 'JITSI_MEET'
+          : lc.provider,
       providerRoomId: lc.providerRoomId,
       status: lc.status,
       participantCount: lc._count.participants,
@@ -160,7 +201,8 @@ export class LiveClassesService {
   }
 
   /**
-   * Schedules a new live class and provisions a 100ms room via `Hms100msVideoAdapter` (C-004, C-030).
+   * Schedules a new live class using Jitsi Meet (default, zero credit card, works on localhost & VPS),
+   * Unlisted YouTube Live Broadcast, or 100ms (if configured).
    */
   static async createLiveClass(
     actor: AuthenticatedActor,
@@ -171,6 +213,8 @@ export class LiveClassesService {
       description?: string;
       scheduledStartAt: string;
       scheduledEndAt: string;
+      provider?: 'JITSI_MEET' | 'YOUTUBE_LIVE' | 'HMS_100MS';
+      youtubeLiveUrlOrId?: string | null;
     }
   ): Promise<LiveClassDto> {
     if (actor.role !== 'ADMIN' && actor.role !== 'TEACHER') {
@@ -207,19 +251,43 @@ export class LiveClassesService {
       }
     }
 
-    // Verify target teacher is actively assigned to the course
-    const assignment = await prisma.courseTeacherAssignment.findUnique({
-      where: {
-        courseId_teacherId: {
-          courseId: payload.courseId,
-          teacherId: resolvedTeacherId,
+    const [assignment, courseInfo] = await Promise.all([
+      prisma.courseTeacherAssignment.findUnique({
+        where: {
+          courseId_teacherId: {
+            courseId: payload.courseId,
+            teacherId: resolvedTeacherId,
+          },
         },
-      },
-    });
+      }),
+      prisma.course.findUnique({
+        where: { id: payload.courseId },
+        select: { code: true, title: true },
+      }),
+    ]);
+
     if (!assignment || assignment.status !== 'ACTIVE') {
       throw ApiError.unprocessable(
         'The specified instructor is not actively assigned to this course.'
       );
+    }
+
+    const requestedProvider = payload.provider || 'JITSI_MEET';
+    const effectiveProvider: 'JITSI_MEET' | 'YOUTUBE_LIVE' | 'HMS_100MS' =
+      requestedProvider === 'YOUTUBE_LIVE'
+        ? 'YOUTUBE_LIVE'
+        : requestedProvider === 'HMS_100MS' && hmsAdapter.isLive100msConfigured()
+        ? 'HMS_100MS'
+        : 'JITSI_MEET';
+
+    let youtubeVideoId: string | null = null;
+    if (effectiveProvider === 'YOUTUBE_LIVE') {
+      youtubeVideoId = extractYouTubeLiveId(payload.youtubeLiveUrlOrId);
+      if (!youtubeVideoId) {
+        throw ApiError.badRequest(
+          'Provide a valid 11-character YouTube Live Video ID or watch URL when scheduling a YOUTUBE_LIVE broadcast.'
+        );
+      }
     }
 
     const created = await prisma.$transaction(async (tx) => {
@@ -231,20 +299,34 @@ export class LiveClassesService {
           description: payload.description || null,
           scheduledStartAt: startDate,
           scheduledEndAt: endDate,
-          provider: hmsAdapter.providerName,
+          provider: effectiveProvider,
           status: 'SCHEDULED',
         },
       });
 
-      const room = await hmsAdapter.createRoom({
-        courseId: payload.courseId,
-        liveClassId: initial.id,
-        title: payload.title,
-      });
+      let provisionedRoomId: string;
+      if (effectiveProvider === 'YOUTUBE_LIVE' && youtubeVideoId) {
+        provisionedRoomId = youtubeVideoId;
+      } else if (effectiveProvider === 'HMS_100MS') {
+        const room = await hmsAdapter.createRoom({
+          courseId: payload.courseId,
+          liveClassId: initial.id,
+          title: payload.title,
+        });
+        provisionedRoomId = room.providerRoomId;
+      } else {
+        const jitsiRoom = await jitsiAdapter.createRoom({
+          courseId: payload.courseId,
+          courseCode: courseInfo?.code || 'COURSE',
+          liveClassId: initial.id,
+          title: payload.title,
+        });
+        provisionedRoomId = jitsiRoom.providerRoomId;
+      }
 
       const withRoom = await tx.liveClass.update({
         where: { id: initial.id },
-        data: { providerRoomId: room.providerRoomId },
+        data: { providerRoomId: provisionedRoomId },
         include: {
           course: { select: { id: true, code: true, title: true } },
           teacher: { select: { id: true, fullName: true, email: true } },
@@ -261,6 +343,7 @@ export class LiveClassesService {
           afterDataJson: JSON.stringify({
             courseId: withRoom.courseId,
             teacherId: withRoom.teacherId,
+            provider: effectiveProvider,
             providerRoomId: withRoom.providerRoomId,
             scheduledStartAt: withRoom.scheduledStartAt.toISOString(),
           }),
@@ -268,6 +351,14 @@ export class LiveClassesService {
       });
 
       return withRoom;
+    });
+
+    await OmnichannelMessagingService.dispatchToCourseCohort({
+      actorId: actor.id,
+      courseId: created.courseId,
+      eventType: 'LIVE_CLASS_SCHEDULED',
+      title: `Live Class Scheduled: ${created.title}`,
+      body: `Instructor ${created.teacher.fullName} scheduled a live session (${created.provider}) for ${created.course.code} starting at ${created.scheduledStartAt.toISOString()}.`,
     });
 
     return {
@@ -357,18 +448,25 @@ export class LiveClassesService {
   }
 
   /**
-   * Issues a short-lived (15m) 100ms room token and logs participant join in `live_class_participants` (C-004, C-027, C-030).
-   * - Unenrolled or overdue-suspended students (`SUSPENDED_OVERDUE`) are blocked by `assertCourseAccessScope`.
-   * - Unassigned teachers are blocked by `assertCourseAccessScope`.
+   * Issues a live classroom join ticket (Jitsi Meet IFrame API / YouTube Live / 100ms)
+   * and logs participant join in `live_class_participants` (C-004, C-027, C-030).
+   * Automatically routes legacy `HMS_100MS` sessions to `JITSI_MEET` when 100ms keys are unconfigured
+   * so localhost and VPS testing works immediately with zero credit card required.
    */
   static async issueJoinToken(
     actor: AuthenticatedActor,
     liveClassId: string
   ): Promise<LiveRoomJoinTicketDto> {
-    const liveClass = await prisma.liveClass.findUnique({
-      where: { id: liveClassId },
-      include: { course: { select: { title: true } } },
-    });
+    const [liveClass, actorUser] = await Promise.all([
+      prisma.liveClass.findUnique({
+        where: { id: liveClassId },
+        include: { course: { select: { code: true, title: true } } },
+      }),
+      prisma.user.findUnique({
+        where: { id: actor.id },
+        select: { fullName: true, email: true },
+      }),
+    ]);
 
     if (!liveClass) {
       throw ApiError.notFound('Live class session not found.');
@@ -382,7 +480,7 @@ export class LiveClassesService {
       );
     }
 
-    const roomId = liveClass.providerRoomId || `hms_room_${liveClass.id.slice(0, 8)}`;
+    const rawRoomId = liveClass.providerRoomId || `room_${liveClass.id.slice(0, 8)}`;
     const roomRole: 'host' | 'co-host' | 'guest-student' =
       actor.role === 'ADMIN'
         ? 'co-host'
@@ -392,19 +490,55 @@ export class LiveClassesService {
           : 'co-host'
         : 'guest-student';
 
-    const { token, expiresAt } = await hmsAdapter.generateShortLivedRoomToken({
-      roomId,
+    const participantDisplayName = actorUser?.fullName || actor.email;
+    const participantEmail = actorUser?.email || actor.email;
+
+    // Resolve effective provider (use Jitsi Meet if HMS_100MS is not configured with live keys)
+    const effectiveProvider: 'JITSI_MEET' | 'YOUTUBE_LIVE' | 'HMS_100MS' =
+      liveClass.provider === 'YOUTUBE_LIVE'
+        ? 'YOUTUBE_LIVE'
+        : liveClass.provider === 'HMS_100MS' && hmsAdapter.isLive100msConfigured()
+        ? 'HMS_100MS'
+        : 'JITSI_MEET';
+
+    const jitsiTicket = await jitsiAdapter.generateShortLivedRoomToken({
+      roomId: rawRoomId,
+      courseCode: liveClass.course.code,
       userId: actor.id,
       role: roomRole,
-      expiresInSeconds: 900,
+      displayName: participantDisplayName,
+      email: participantEmail,
+      expiresInSeconds: 3600,
     });
+
+    let token = jitsiTicket.token;
+    let expiresAt = jitsiTicket.expiresAt;
+
+    if (effectiveProvider === 'HMS_100MS') {
+      const hmsTicket = await hmsAdapter.generateShortLivedRoomToken({
+        roomId: rawRoomId,
+        userId: actor.id,
+        role: roomRole,
+        expiresInSeconds: 900,
+      });
+      token = hmsTicket.token;
+      expiresAt = hmsTicket.expiresAt;
+    }
+
+    const youtubeId =
+      effectiveProvider === 'YOUTUBE_LIVE'
+        ? extractYouTubeLiveId(rawRoomId) || 'M7lc1UVf-VE'
+        : null;
+    const youtubeEmbedUrl = youtubeId
+      ? `https://www.youtube-nocookie.com/embed/${youtubeId}?rel=0&modestbranding=1&autoplay=1`
+      : null;
 
     const participant = await prisma.$transaction(async (tx) => {
       // Auto-transition SCHEDULED -> LIVE if the host teacher joins
       if (actor.role === 'TEACHER' && liveClass.status === 'SCHEDULED') {
         await tx.liveClass.update({
           where: { id: liveClass.id },
-          data: { status: 'LIVE', providerRoomId: roomId },
+          data: { status: 'LIVE', providerRoomId: rawRoomId },
         });
       }
 
@@ -425,7 +559,8 @@ export class LiveClassesService {
           entityId: p.id,
           afterDataJson: JSON.stringify({
             liveClassId: liveClass.id,
-            roomId,
+            provider: effectiveProvider,
+            roomId: jitsiTicket.jitsiRoomName,
             roomRole,
           }),
         },
@@ -437,10 +572,18 @@ export class LiveClassesService {
     return {
       liveClassId: liveClass.id,
       courseTitle: liveClass.course.title,
+      courseCode: liveClass.course.code,
       title: liveClass.title,
-      provider: 'HMS_100MS',
-      providerRoomId: roomId,
+      provider: effectiveProvider,
+      providerRoomId:
+        effectiveProvider === 'JITSI_MEET' ? jitsiTicket.jitsiRoomName : rawRoomId,
+      jitsiDomain: jitsiTicket.jitsiDomain,
+      jitsiRoomName: jitsiTicket.jitsiRoomName,
+      embedUrl: youtubeEmbedUrl || jitsiTicket.embedUrl,
+      youtubeEmbedUrl,
       roomRole,
+      participantDisplayName,
+      participantEmail,
       token,
       expiresAt,
       participantId: participant.id,
@@ -539,7 +682,12 @@ export class LiveClassesController {
   static create = catchAsync(async (req: Request, res: Response) => {
     if (!req.user) throw ApiError.unauthorized();
     const created = await LiveClassesService.createLiveClass(req.user, req.body);
-    return apiResponse(res, 201, 'Live class scheduled and 100ms room provisioned', created);
+    return apiResponse(
+      res,
+      201,
+      'Live class scheduled and classroom room provisioned',
+      created
+    );
   });
 
   static updateStatus = catchAsync(async (req: Request, res: Response) => {
@@ -554,11 +702,14 @@ export class LiveClassesController {
 
   static issueJoinToken = catchAsync(async (req: Request, res: Response) => {
     if (!req.user) throw ApiError.unauthorized();
-    const ticket = await LiveClassesService.issueJoinToken(req.user, String(req.params.liveClassId));
+    const ticket = await LiveClassesService.issueJoinToken(
+      req.user,
+      String(req.params.liveClassId)
+    );
     return apiResponse(
       res,
       200,
-      'Short-lived 100ms room token generated and participation logged',
+      'Live classroom join ticket generated and participation logged',
       ticket
     );
   });
@@ -574,7 +725,10 @@ export class LiveClassesController {
 
   static listParticipants = catchAsync(async (req: Request, res: Response) => {
     if (!req.user) throw ApiError.unauthorized();
-    const list = await LiveClassesService.listParticipants(req.user, String(req.params.liveClassId));
+    const list = await LiveClassesService.listParticipants(
+      req.user,
+      String(req.params.liveClassId)
+    );
     return apiResponse(res, 200, 'Live class participants retrieved', list);
   });
 }

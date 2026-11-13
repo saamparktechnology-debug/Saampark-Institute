@@ -1,19 +1,18 @@
 import { apiClient } from '@/lib/axios';
 import { ApiEnvelope } from '@/features/auth/types/auth.types';
 import {
-  AdminWalletDirectoryItem,
-  MyWalletDetail,
+  AdminWalletSummaryItem,
+  CreateRazorpayOrderResponse,
+  GstTaxInvoiceBreakdown,
+  MyWalletAndLedgerData,
   PaymentTransactionItem,
   RedemptionRequestItem,
-  ReferralListResponse,
-  TeacherPayoutStatementItem,
+  ReferralSummaryData,
+  TeacherPayoutItem,
 } from '../types/finance.types';
 
-/**
- * 100% API-driven Finance Service — zero hardcoded mock records.
- */
 export const financeService = {
-  async listPaymentTransactions(params?: Record<string, string | number>): Promise<{
+  async listPayments(params?: Record<string, string | number>): Promise<{
     items: PaymentTransactionItem[];
     meta: Record<string, unknown> | null;
   }> {
@@ -28,42 +27,76 @@ export const financeService = {
     installmentSequenceNumber: number;
     useWalletBalance: boolean;
     idempotencyKey: string;
-  }) {
-    const res = await apiClient.post<ApiEnvelope<Record<string, unknown>>>(
+  }): Promise<CreateRazorpayOrderResponse> {
+    const res = await apiClient.post<ApiEnvelope<CreateRazorpayOrderResponse>>(
       '/payments/orders',
       payload
     );
     return res.data.data;
   },
 
-  async refundTransaction(transactionId: string, reason: string) {
-    const res = await apiClient.post<ApiEnvelope<Record<string, unknown>>>(
+  async verifyRazorpayCheckout(payload: {
+    enrollmentId: string;
+    installmentSequenceNumber: number;
+    razorpayOrderId: string;
+    razorpayPaymentId: string;
+    razorpaySignature?: string;
+  }) {
+    const res = await apiClient.post<ApiEnvelope<unknown>>(
+      '/payments/verify-checkout',
+      payload
+    );
+    return res.data.data;
+  },
+
+  async updatePaymentGstDetails(
+    transactionId: string,
+    payload: {
+      customerGstin?: string | null;
+      placeOfSupplyState: string;
+    }
+  ): Promise<{ transactionId: string; gstInvoice: GstTaxInvoiceBreakdown }> {
+    const res = await apiClient.patch<
+      ApiEnvelope<{ transactionId: string; gstInvoice: GstTaxInvoiceBreakdown }>
+    >(`/payments/${transactionId}/gst-details`, payload);
+    return res.data.data;
+  },
+
+  async refundPayment(transactionId: string, reason: string) {
+    const res = await apiClient.post<ApiEnvelope<unknown>>(
       `/payments/${transactionId}/refund`,
       { reason }
     );
     return res.data.data;
   },
 
-  async getMyWallet(): Promise<MyWalletDetail> {
-    const res = await apiClient.get<ApiEnvelope<MyWalletDetail>>('/wallets/me');
+  async extendInstallmentSchedule(
+    enrollmentId: string,
+    payload: { extensionDays: number; reason: string }
+  ) {
+    const res = await apiClient.post<ApiEnvelope<unknown>>(
+      `/enrollments/${enrollmentId}/extend-schedule`,
+      payload
+    );
     return res.data.data;
   },
 
-  async listAllWalletsForAdmin(): Promise<AdminWalletDirectoryItem[]> {
-    const res = await apiClient.get<ApiEnvelope<AdminWalletDirectoryItem[]>>(
-      '/wallets/admin/all'
-    );
+  async getMyWallet(): Promise<MyWalletAndLedgerData> {
+    const res = await apiClient.get<ApiEnvelope<MyWalletAndLedgerData>>('/wallets/me');
+    return res.data.data;
+  },
+
+  async listAllWalletsForAdmin(): Promise<AdminWalletSummaryItem[]> {
+    const res = await apiClient.get<ApiEnvelope<AdminWalletSummaryItem[]>>('/wallets/admin/all');
     return res.data.data;
   },
 
   async listRedemptions(): Promise<RedemptionRequestItem[]> {
-    const res = await apiClient.get<ApiEnvelope<RedemptionRequestItem[]>>(
-      '/wallets/redemptions'
-    );
+    const res = await apiClient.get<ApiEnvelope<RedemptionRequestItem[]>>('/wallets/redemptions');
     return res.data.data;
   },
 
-  async requestUpiRedemption(payload: {
+  async createRedemption(payload: {
     amount: number;
     upiId: string;
     idempotencyKey: string;
@@ -75,7 +108,7 @@ export const financeService = {
     return res.data.data;
   },
 
-  async reviewUpiRedemption(
+  async reviewRedemption(
     redemptionId: string,
     payload: {
       decision: 'PAID' | 'REJECTED';
@@ -83,22 +116,20 @@ export const financeService = {
       rejectionReason?: string;
     }
   ) {
-    const res = await apiClient.patch<ApiEnvelope<Record<string, unknown>>>(
+    const res = await apiClient.patch<ApiEnvelope<unknown>>(
       `/wallets/redemptions/${redemptionId}/review`,
       payload
     );
     return res.data.data;
   },
 
-  async listReferrals(): Promise<ReferralListResponse> {
-    const res = await apiClient.get<ApiEnvelope<ReferralListResponse>>('/referrals');
+  async listReferrals(): Promise<ReferralSummaryData> {
+    const res = await apiClient.get<ApiEnvelope<ReferralSummaryData>>('/referrals');
     return res.data.data;
   },
 
-  async listTeacherPayouts(): Promise<TeacherPayoutStatementItem[]> {
-    const res = await apiClient.get<ApiEnvelope<TeacherPayoutStatementItem[]>>(
-      '/teacher-payouts'
-    );
+  async listTeacherPayouts(): Promise<TeacherPayoutItem[]> {
+    const res = await apiClient.get<ApiEnvelope<TeacherPayoutItem[]>>('/teacher-payouts');
     return res.data.data;
   },
 
@@ -107,21 +138,25 @@ export const financeService = {
     courseId: string;
     periodStart: string;
     periodEnd: string;
+    tdsPercent?: number;
     adjustments: number;
     notes?: string;
   }) {
-    const res = await apiClient.post<ApiEnvelope<Record<string, unknown>>>(
+    const res = await apiClient.post<ApiEnvelope<unknown>>(
       '/teacher-payouts/generate',
       payload
     );
     return res.data.data;
   },
 
-  async settleTeacherPayout(
+  async updateTeacherPayoutStatus(
     payoutId: string,
-    payload: { status: 'APPROVED' | 'PAID' | 'CANCELLED'; paymentReference?: string }
+    payload: {
+      status: 'APPROVED' | 'PAID' | 'CANCELLED';
+      paymentReference?: string;
+    }
   ) {
-    const res = await apiClient.patch<ApiEnvelope<Record<string, unknown>>>(
+    const res = await apiClient.patch<ApiEnvelope<unknown>>(
       `/teacher-payouts/${payoutId}/status`,
       payload
     );

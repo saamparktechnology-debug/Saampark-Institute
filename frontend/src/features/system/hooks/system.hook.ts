@@ -52,3 +52,14 @@ export function useVpsReadinessQuery() {
     queryFn: () => systemService.getVpsReadiness(),
   });
 }
+
+export function useSendInstallmentRemindersMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => systemService.sendInstallmentReminders(),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.operations.notifications() });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.operations.deliveryLogs() });
+    },
+  });
+}

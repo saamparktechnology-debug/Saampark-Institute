@@ -1,5 +1,5 @@
-import test from "node:test";
-import assert from "node:assert/strict";
+import test from 'node:test';
+import assert from 'node:assert/strict';
 
 /**
  * Phase 5 Assessments, Grading Queues, Results, Performance & Verifiable Certificates Unit Tests (`node --test`)
@@ -11,32 +11,21 @@ import assert from "node:assert/strict";
  * 5. Certificate revocation requires mandatory revocationReason and invalidates verification status (O-023)
  */
 
-function sanitizeExamQuestionsForActor(
-  questions,
-  actorRole,
-  resultPublishAtMs,
-  nowMs,
-) {
+function sanitizeExamQuestionsForActor(questions, actorRole, resultPublishAtMs, nowMs) {
   const canReveal =
-    actorRole === "ADMIN" ||
-    actorRole === "TEACHER" ||
+    actorRole === 'ADMIN' ||
+    actorRole === 'TEACHER' ||
     (resultPublishAtMs !== null && nowMs >= resultPublishAtMs);
 
   return questions.map((q) => ({
     ...q,
     options: q.options.map((o) =>
-      canReveal
-        ? { id: o.id, text: o.text, isCorrect: Boolean(o.isCorrect) }
-        : { id: o.id, text: o.text },
+      canReveal ? { id: o.id, text: o.text, isCorrect: Boolean(o.isCorrect) } : { id: o.id, text: o.text }
     ),
   }));
 }
 
-function autoGradeObjectiveAttempt(
-  questions,
-  studentAnswers,
-  totalExamMarks = 100,
-) {
+function autoGradeObjectiveAttempt(questions, studentAnswers, totalExamMarks = 100) {
   let earned = 0;
   let maxQMarks = 0;
   for (const q of questions) {
@@ -47,31 +36,18 @@ function autoGradeObjectiveAttempt(
       earned += q.marks;
     }
   }
-  const score =
-    maxQMarks > 0
-      ? Number(((earned / maxQMarks) * totalExamMarks).toFixed(2))
-      : 0;
+  const score = maxQMarks > 0 ? Number(((earned / maxQMarks) * totalExamMarks).toFixed(2)) : 0;
   const pct = (score / totalExamMarks) * 100;
   const grade =
-    pct >= 90
-      ? "A+"
-      : pct >= 80
-        ? "A"
-        : pct >= 70
-          ? "B"
-          : pct >= 60
-            ? "C"
-            : pct >= 50
-              ? "D"
-              : "F";
+    pct >= 90 ? 'A+' : pct >= 80 ? 'A' : pct >= 70 ? 'B' : pct >= 60 ? 'C' : pct >= 50 ? 'D' : 'F';
   return { score, grade };
 }
 
 function validateAssignmentGrading({ marksAwarded, maxMarks }) {
   if (marksAwarded < 0 || marksAwarded > maxMarks) {
-    throw new Error("MARKS_EXCEED_MAX_BOUNDS");
+    throw new Error('MARKS_EXCEED_MAX_BOUNDS');
   }
-  return { status: "GRADED", marksAwarded: marksAwarded.toFixed(2) };
+  return { status: 'GRADED', marksAwarded: marksAwarded.toFixed(2) };
 }
 
 function verifyCertificateEligibility({
@@ -81,27 +57,27 @@ function verifyCertificateEligibility({
   bestExamPercent,
   minPassMarksPercent = 50,
 }) {
-  if (actorRole !== "ADMIN") {
+  if (actorRole !== 'ADMIN') {
     if (attendancePercent < minAttendancePercent) {
-      throw new Error("ATTENDANCE_BELOW_THRESHOLD");
+      throw new Error('ATTENDANCE_BELOW_THRESHOLD');
     }
     if (bestExamPercent < minPassMarksPercent) {
-      throw new Error("EXAM_SCORE_BELOW_PASS_THRESHOLD");
+      throw new Error('EXAM_SCORE_BELOW_PASS_THRESHOLD');
     }
   }
-  return { eligible: true, status: "ISSUED" };
+  return { eligible: true, status: 'ISSUED' };
 }
 
-test("1. Exam answer-reveal protection strips isCorrect for students before resultPublishAt (O-022)", () => {
+test('1. Exam answer-reveal protection strips isCorrect for students before resultPublishAt (O-022)', () => {
   const nowMs = Date.now();
   const futurePublishMs = nowMs + 3600_000;
   const sampleQuestions = [
     {
-      id: "q1",
+      id: 'q1',
       marks: 50,
       options: [
-        { id: "o1", text: "Hamiltonian", isCorrect: true },
-        { id: "o2", text: "Position", isCorrect: false },
+        { id: 'o1', text: 'Hamiltonian', isCorrect: true },
+        { id: 'o2', text: 'Position', isCorrect: false },
       ],
     },
   ];
@@ -109,124 +85,116 @@ test("1. Exam answer-reveal protection strips isCorrect for students before resu
   // Student before resultPublishAt must NOT see isCorrect property
   const studentBefore = sanitizeExamQuestionsForActor(
     sampleQuestions,
-    "STUDENT",
+    'STUDENT',
     futurePublishMs,
-    nowMs,
+    nowMs
   );
-  assert.equal("isCorrect" in studentBefore[0].options[0], false);
+  assert.equal('isCorrect' in studentBefore[0].options[0], false);
 
   // Teacher always sees isCorrect
   const teacherView = sanitizeExamQuestionsForActor(
     sampleQuestions,
-    "TEACHER",
+    'TEACHER',
     futurePublishMs,
-    nowMs,
+    nowMs
   );
   assert.equal(teacherView[0].options[0].isCorrect, true);
 
   // Student after resultPublishAt sees isCorrect
   const studentAfter = sanitizeExamQuestionsForActor(
     sampleQuestions,
-    "STUDENT",
+    'STUDENT',
     futurePublishMs,
-    futurePublishMs + 1000,
+    futurePublishMs + 1000
   );
   assert.equal(studentAfter[0].options[0].isCorrect, true);
 });
 
-test("2. Objective exam auto-grading computes normalized score and letter grade (O-022)", () => {
+test('2. Objective exam auto-grading computes normalized score and letter grade (O-022)', () => {
   const questions = [
     {
-      id: "q1",
+      id: 'q1',
       marks: 50,
       options: [
-        { id: "a", text: "Correct", isCorrect: true },
-        { id: "b", text: "Wrong", isCorrect: false },
+        { id: 'a', text: 'Correct', isCorrect: true },
+        { id: 'b', text: 'Wrong', isCorrect: false },
       ],
     },
     {
-      id: "q2",
+      id: 'q2',
       marks: 50,
       options: [
-        { id: "t", text: "True", isCorrect: true },
-        { id: "f", text: "False", isCorrect: false },
+        { id: 't', text: 'True', isCorrect: true },
+        { id: 'f', text: 'False', isCorrect: false },
       ],
     },
   ];
 
-  const fullScore = autoGradeObjectiveAttempt(
-    questions,
-    { q1: "a", q2: "t" },
-    100,
-  );
+  const fullScore = autoGradeObjectiveAttempt(questions, { q1: 'a', q2: 't' }, 100);
   assert.equal(fullScore.score, 100);
-  assert.equal(fullScore.grade, "A+");
+  assert.equal(fullScore.grade, 'A+');
 
-  const halfScore = autoGradeObjectiveAttempt(
-    questions,
-    { q1: "a", q2: "f" },
-    100,
-  );
+  const halfScore = autoGradeObjectiveAttempt(questions, { q1: 'a', q2: 'f' }, 100);
   assert.equal(halfScore.score, 50);
-  assert.equal(halfScore.grade, "D");
+  assert.equal(halfScore.grade, 'D');
 });
 
-test("3. Assignment grading rejects negative or out-of-range marks (C-007)", () => {
+test('3. Assignment grading rejects negative or out-of-range marks (C-007)', () => {
   assert.throws(
     () => validateAssignmentGrading({ marksAwarded: 105, maxMarks: 100 }),
-    /MARKS_EXCEED_MAX_BOUNDS/,
+    /MARKS_EXCEED_MAX_BOUNDS/
   );
   assert.throws(
     () => validateAssignmentGrading({ marksAwarded: -5, maxMarks: 100 }),
-    /MARKS_EXCEED_MAX_BOUNDS/,
+    /MARKS_EXCEED_MAX_BOUNDS/
   );
   const valid = validateAssignmentGrading({ marksAwarded: 92, maxMarks: 100 });
-  assert.equal(valid.marksAwarded, "92.00");
+  assert.equal(valid.marksAwarded, '92.00');
 });
 
-test("4. Certificate eligibility enforces >= 75% attendance and >= 50% exam pass threshold (O-023)", () => {
+test('4. Certificate eligibility enforces >= 75% attendance and >= 50% exam pass threshold (O-023)', () => {
   // Low attendance blocked for student
   assert.throws(
     () =>
       verifyCertificateEligibility({
-        actorRole: "STUDENT",
+        actorRole: 'STUDENT',
         attendancePercent: 68,
         bestExamPercent: 85,
       }),
-    /ATTENDANCE_BELOW_THRESHOLD/,
+    /ATTENDANCE_BELOW_THRESHOLD/
   );
 
   // Low exam score blocked for student
   assert.throws(
     () =>
       verifyCertificateEligibility({
-        actorRole: "STUDENT",
+        actorRole: 'STUDENT',
         attendancePercent: 88,
         bestExamPercent: 42,
       }),
-    /EXAM_SCORE_BELOW_PASS_THRESHOLD/,
+    /EXAM_SCORE_BELOW_PASS_THRESHOLD/
   );
 
   // Qualifying student succeeds
   const cert = verifyCertificateEligibility({
-    actorRole: "STUDENT",
+    actorRole: 'STUDENT',
     attendancePercent: 90,
     bestExamPercent: 94,
   });
-  assert.equal(cert.status, "ISSUED");
+  assert.equal(cert.status, 'ISSUED');
 });
 
-test("5. Certificate verification reflects ISSUED vs REVOKED state accurately (O-023)", () => {
+test('5. Certificate verification reflects ISSUED vs REVOKED state accurately (O-023)', () => {
   const certRecord = {
-    certificateNumber: "CERT-ARGON-2026-PHYS401-0042",
-    status: "ISSUED",
+    certificateNumber: 'CERT-ARGON-2026-PHYS401-0042',
+    status: 'ISSUED',
     revocationReason: null,
   };
-  assert.equal(certRecord.status === "ISSUED", true);
+  assert.equal(certRecord.status === 'ISSUED', true);
 
   // Revoke certificate
-  certRecord.status = "REVOKED";
-  certRecord.revocationReason = "Academic integrity policy violation";
-  assert.equal(certRecord.status === "ISSUED", false);
+  certRecord.status = 'REVOKED';
+  certRecord.revocationReason = 'Academic integrity policy violation';
+  assert.equal(certRecord.status === 'ISSUED', false);
   assert.ok(certRecord.revocationReason.length >= 5);
 });

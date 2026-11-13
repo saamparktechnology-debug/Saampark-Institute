@@ -12,9 +12,10 @@ import {
   authorizeRoles,
 } from '../../middlewares/auth.middleware';
 import { validateRequest } from '../../middlewares/validate.middleware';
+import { OmnichannelMessagingService } from '../../integrations/messaging.adapter';
 
 // ----------------------------------------------------------------------------
-// QUESTION BANK & ANSWER-REVEAL PROTECTION HELPERS (O-022, DATABASE_PLAN §2.6)
+// QUESTION BANK, PROCTORING & ANSWER-REVEAL PROTECTION HELPERS (O-022)
 // ----------------------------------------------------------------------------
 
 export interface ExamQuestionOption {
@@ -34,53 +35,158 @@ export interface ExamQuestionItem {
 export interface ParsedExamPayload {
   summary: string;
   questions: ExamQuestionItem[];
+  maxTabSwitches?: number;
 }
 
-export function encodeExamInstructions(summary: string, questions: ExamQuestionItem[]): string {
-  return JSON.stringify({ summary, questions });
+export interface ExamProctoringViolationEvent {
+  type: 'TAB_SWITCH' | 'WINDOW_BLUR' | 'FULLSCREEN_EXIT' | 'COPY_PASTE_BLOCKED';
+  occurredAt: string;
+  detail?: string;
 }
+
+export interface ExamAttemptProctoringMeta {
+  answers: Record<string, string>;
+  remainingSeconds?: number | null;
+  tabSwitchCount: number;
+  fullscreenExits: number;
+  copyPasteBlockedCount: number;
+  autoSubmittedByProctor: boolean;
+  integrityStatus: 'CLEAN' | 'WARNING' | 'FLAGGED_VIOLATION';
+  violations: ExamProctoringViolationEvent[];
+  updatedAt: string;
+}
+
+export const MAX_ALLOWED_EXAM_TAB_SWITCHES = 3;
+
+export function computeExamIntegrityStatus(params: {
+  tabSwitchCount: number;
+  fullscreenExits: number;
+  autoSubmittedByProctor: boolean;
+  maxTabSwitches?: number;
+}): 'CLEAN' | 'WARNING' | 'FLAGGED_VIOLATION' {
+  const limit = params.maxTabSwitches ?? MAX_ALLOWED_EXAM_TAB_SWITCHES;
+  if (
+    params.autoSubmittedByProctor ||
+    params.tabSwitchCount >= limit ||
+    params.fullscreenExits >= limit
+  ) {
+    return 'FLAGGED_VIOLATION';
+  }
+  if (params.tabSwitchCount > 0 || params.fullscreenExits > 0) {
+    return 'WARNING';
+  }
+  return 'CLEAN';
+}
+
+export function encodeExamInstructions(
+  summary: string,
+  questions: ExamQuestionItem[],
+  maxTabSwitches = MAX_ALLOWED_EXAM_TAB_SWITCHES
+): string {
+  return JSON.stringify({ summary, questions, maxTabSwitches });
+}
+
+export const STANDARD_DEFAULT_EXAM_QUESTIONS: ExamQuestionItem[] = [
+  {
+    id: 'q1',
+    questionType: 'MCQ_SINGLE',
+    prompt:
+      'Which operator represents the total energy observable in the time-independent Schrödinger equation?',
+    marks: 20,
+    options: [
+      { id: 'q1-a', text: 'Hamiltonian Operator (Ĥ = T̂ + V̂)', isCorrect: true },
+      { id: 'q1-b', text: 'Position Operator (x̂)', isCorrect: false },
+      { id: 'q1-c', text: 'Linear Momentum Operator (p̂ = -iħ∇)', isCorrect: false },
+      { id: 'q1-d', text: 'Parity Inversion Operator (P̂)', isCorrect: false },
+    ],
+  },
+  {
+    id: 'q2',
+    questionType: 'TRUE_FALSE',
+    prompt: 'All eigenvalues of a Hermitian (self-adjoint) quantum observable operator are strictly real numbers.',
+    marks: 20,
+    options: [
+      { id: 'q2-t', text: 'True — Hermitian operators always yield real observable eigenvalues', isCorrect: true },
+      { id: 'q2-f', text: 'False — Eigenvalues can be complex for bound states', isCorrect: false },
+    ],
+  },
+  {
+    id: 'q3',
+    questionType: 'MCQ_SINGLE',
+    prompt:
+      'What is the canonical fundamental commutation relation [x̂, p̂_x] between the position and momentum operators?',
+    marks: 20,
+    options: [
+      { id: 'q3-a', text: '[x̂, p̂_x] = 0 (Operators commute)', isCorrect: false },
+      { id: 'q3-b', text: '[x̂, p̂_x] = iħ', isCorrect: true },
+      { id: 'q3-c', text: '[x̂, p̂_x] = -ħ² ∂²/∂x²', isCorrect: false },
+      { id: 'q3-d', text: '[x̂, p̂_x] = iħ / 2π', isCorrect: false },
+    ],
+  },
+  {
+    id: 'q4',
+    questionType: 'MCQ_SINGLE',
+    prompt:
+      'For a quantum particle confined in a 1D infinite square potential well of width L, how do the quantized energy levels E_n scale with the principal quantum number n?',
+    marks: 20,
+    options: [
+      { id: 'q4-a', text: 'Linearly proportional to n (E_n ∝ n)', isCorrect: false },
+      { id: 'q4-b', text: 'Proportional to n² (E_n = n²π²ħ² / 2mL²)', isCorrect: true },
+      { id: 'q4-c', text: 'Inversely proportional to n² (E_n ∝ -1/n²)', isCorrect: false },
+      { id: 'q4-d', text: 'Independent of the quantum number n', isCorrect: false },
+    ],
+  },
+  {
+    id: 'q5',
+    questionType: 'MCQ_SINGLE',
+    prompt:
+      'According to Max Born’s statistical interpretation of the wave function Ψ(x, t), what physical quantity does |Ψ(x, t)|² dx represent?',
+    marks: 20,
+    options: [
+      { id: 'q5-a', text: 'The instantaneous kinetic energy density at position x', isCorrect: false },
+      { id: 'q5-b', text: 'The group velocity of the de Broglie wave packet', isCorrect: false },
+      {
+        id: 'q5-c',
+        text: 'The probability of finding the particle in the infinitesimal interval [x, x + dx] at time t',
+        isCorrect: true,
+      },
+      { id: 'q5-d', text: 'The expectation value of the Hamiltonian operator', isCorrect: false },
+    ],
+  },
+];
 
 export function decodeExamInstructions(rawInstructions: string | null): ParsedExamPayload {
   if (!rawInstructions) {
-    return { summary: 'Standard course examination.', questions: [] };
+    return {
+      summary: 'Standard proctored computer-based course examination.',
+      questions: STANDARD_DEFAULT_EXAM_QUESTIONS,
+      maxTabSwitches: MAX_ALLOWED_EXAM_TAB_SWITCHES,
+    };
   }
   try {
     const parsed = JSON.parse(rawInstructions) as Partial<ParsedExamPayload>;
     if (parsed && typeof parsed.summary === 'string' && Array.isArray(parsed.questions)) {
+      const isLegacyTwoQuestionSeed =
+        parsed.questions.length === 2 &&
+        parsed.questions[0]?.id === 'q1' &&
+        parsed.questions[1]?.id === 'q2';
       return {
         summary: parsed.summary,
-        questions: parsed.questions,
+        questions: isLegacyTwoQuestionSeed
+          ? STANDARD_DEFAULT_EXAM_QUESTIONS
+          : parsed.questions.length > 0
+          ? parsed.questions
+          : STANDARD_DEFAULT_EXAM_QUESTIONS,
+        maxTabSwitches: parsed.maxTabSwitches ?? MAX_ALLOWED_EXAM_TAB_SWITCHES,
       };
     }
   } catch {
-    // Plain text fallback for legacy seeded instructions
+    // Plain text instructions from initial seed
   }
   return {
     summary: rawInstructions,
-    questions: [
-      {
-        id: 'q-default-1',
-        questionType: 'MCQ_SINGLE',
-        prompt:
-          'Which operator represents the total energy observable in the time-independent Schrödinger equation?',
-        marks: 50,
-        options: [
-          { id: 'opt-1', text: 'Hamiltonian Operator (Ĥ)', isCorrect: true },
-          { id: 'opt-2', text: 'Position Operator (x̂)', isCorrect: false },
-          { id: 'opt-3', text: 'Momentum Operator (p̂)', isCorrect: false },
-        ],
-      },
-      {
-        id: 'q-default-2',
-        questionType: 'TRUE_FALSE',
-        prompt: 'Eigenvalues of a Hermitian operator are always real numbers.',
-        marks: 50,
-        options: [
-          { id: 'opt-t', text: 'True', isCorrect: true },
-          { id: 'opt-f', text: 'False', isCorrect: false },
-        ],
-      },
-    ],
+    questions: STANDARD_DEFAULT_EXAM_QUESTIONS,
+    maxTabSwitches: MAX_ALLOWED_EXAM_TAB_SWITCHES,
   };
 }
 
@@ -137,6 +243,12 @@ const questionSchema = z.object({
     .default([]),
 });
 
+const violationEventSchema = z.object({
+  type: z.enum(['TAB_SWITCH', 'WINDOW_BLUR', 'FULLSCREEN_EXIT', 'COPY_PASTE_BLOCKED']),
+  occurredAt: z.string(),
+  detail: z.string().optional(),
+});
+
 export const createExamValidation = {
   body: z.object({
     courseId: z.string().uuid('Valid courseId UUID is required'),
@@ -150,6 +262,21 @@ export const createExamValidation = {
     endsAt: z.string().min(10),
     resultPublishAt: z.string().min(10).optional().nullable(),
     questions: z.array(questionSchema).optional(),
+    maxTabSwitches: z.number().int().min(1).max(10).default(MAX_ALLOWED_EXAM_TAB_SWITCHES),
+  }),
+};
+
+export const saveExamProgressValidation = {
+  params: z.object({
+    examId: z.string().uuid('Valid examId UUID is required'),
+  }),
+  body: z.object({
+    answers: z.record(z.string(), z.string()).default({}),
+    remainingSeconds: z.number().int().min(0).optional().nullable(),
+    tabSwitchCount: z.number().int().min(0).default(0),
+    fullscreenExits: z.number().int().min(0).default(0),
+    copyPasteBlockedCount: z.number().int().min(0).default(0),
+    violations: z.array(violationEventSchema).default([]),
   }),
 };
 
@@ -159,6 +286,11 @@ export const submitExamAttemptValidation = {
   }),
   body: z.object({
     answers: z.record(z.string(), z.string()).default({}),
+    tabSwitchCount: z.number().int().min(0).default(0),
+    fullscreenExits: z.number().int().min(0).default(0),
+    copyPasteBlockedCount: z.number().int().min(0).default(0),
+    autoSubmittedByProctor: z.boolean().default(false),
+    violations: z.array(violationEventSchema).default([]),
   }),
 };
 
@@ -181,6 +313,7 @@ export class ExamsService {
    * Lists exams strictly scoped by role (C-007, C-013, O-022):
    * - Enforces answer-reveal protection (`sanitizeQuestionsForActor`) so `isCorrect` and unpublished scores
    *   are never exposed to students before `exam.resultPublishAt`.
+   * - Hydrates in-progress saved drafts & proctoring violation telemetry per attempt.
    */
   static async listExams(actor: AuthenticatedActor, rawQuery: Record<string, unknown>) {
     const where: Prisma.ExamWhereInput = {};
@@ -227,6 +360,54 @@ export class ExamsService {
       orderBy: { startsAt: 'asc' },
     });
 
+    const attemptIds = exams.flatMap((ex) => ex.attempts.map((a) => a.id));
+    const proctoringLogs =
+      attemptIds.length > 0
+        ? await prisma.auditLog.findMany({
+            where: {
+              entityType: 'ExamAttempt',
+              entityId: { in: attemptIds },
+              action: {
+                in: [
+                  'EXAM_PROGRESS_AND_PROCTORING_SYNC',
+                  'EXAM_ATTEMPT_SUBMITTED_AND_AUTOGRADED',
+                ],
+              },
+            },
+            orderBy: { createdAt: 'desc' },
+          })
+        : [];
+
+    const proctoringByAttemptId = new Map<string, ExamAttemptProctoringMeta>();
+    for (const log of proctoringLogs) {
+      if (!log.entityId || proctoringByAttemptId.has(log.entityId) || !log.afterDataJson) {
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(log.afterDataJson) as Partial<ExamAttemptProctoringMeta>;
+        proctoringByAttemptId.set(log.entityId, {
+          answers: parsed.answers && typeof parsed.answers === 'object' ? parsed.answers : {},
+          remainingSeconds:
+            typeof parsed.remainingSeconds === 'number' ? parsed.remainingSeconds : null,
+          tabSwitchCount: Number(parsed.tabSwitchCount || 0),
+          fullscreenExits: Number(parsed.fullscreenExits || 0),
+          copyPasteBlockedCount: Number(parsed.copyPasteBlockedCount || 0),
+          autoSubmittedByProctor: Boolean(parsed.autoSubmittedByProctor),
+          integrityStatus:
+            parsed.integrityStatus ||
+            computeExamIntegrityStatus({
+              tabSwitchCount: Number(parsed.tabSwitchCount || 0),
+              fullscreenExits: Number(parsed.fullscreenExits || 0),
+              autoSubmittedByProctor: Boolean(parsed.autoSubmittedByProctor),
+            }),
+          violations: Array.isArray(parsed.violations) ? parsed.violations : [],
+          updatedAt: parsed.updatedAt || log.createdAt.toISOString(),
+        });
+      } catch {
+        // Ignore malformed legacy audit JSON
+      }
+    }
+
     return exams.map((ex) => {
       const decoded = decodeExamInstructions(ex.instructions);
       const isResultPublished =
@@ -245,6 +426,7 @@ export class ExamsService {
         courseTitle: ex.course.title,
         title: ex.title,
         summary: decoded.summary,
+        maxTabSwitches: decoded.maxTabSwitches ?? MAX_ALLOWED_EXAM_TAB_SWITCHES,
         durationSeconds: ex.durationSeconds,
         totalMarks: ex.totalMarks.toFixed(2),
         passMarks: ex.passMarks.toFixed(2),
@@ -257,6 +439,7 @@ export class ExamsService {
         questions: safeQuestions,
         attempts: ex.attempts.map((att) => {
           const canSeeScore = actor.role !== 'STUDENT' || isResultPublished;
+          const procMeta = proctoringByAttemptId.get(att.id);
           return {
             id: att.id,
             examId: att.examId,
@@ -270,6 +453,20 @@ export class ExamsService {
             startedAt: att.startedAt.toISOString(),
             submittedAt: att.submittedAt ? att.submittedAt.toISOString() : null,
             evaluatedAt: att.evaluatedAt ? att.evaluatedAt.toISOString() : null,
+            savedAnswers:
+              actor.role === 'STUDENT' && att.status === 'IN_PROGRESS'
+                ? procMeta?.answers || {}
+                : undefined,
+            remainingSeconds:
+              actor.role === 'STUDENT' && att.status === 'IN_PROGRESS'
+                ? procMeta?.remainingSeconds ?? null
+                : undefined,
+            tabSwitchCount: procMeta?.tabSwitchCount ?? 0,
+            fullscreenExits: procMeta?.fullscreenExits ?? 0,
+            copyPasteBlockedCount: procMeta?.copyPasteBlockedCount ?? 0,
+            autoSubmittedByProctor: procMeta?.autoSubmittedByProctor ?? false,
+            integrityStatus: procMeta?.integrityStatus ?? 'CLEAN',
+            violations: procMeta?.violations ?? [],
           };
         }),
       };
@@ -293,6 +490,7 @@ export class ExamsService {
       endsAt: string;
       resultPublishAt?: string | null;
       questions?: ExamQuestionItem[];
+      maxTabSwitches?: number;
     }
   ) {
     if (actor.role !== 'ADMIN' && actor.role !== 'TEACHER') {
@@ -312,9 +510,13 @@ export class ExamsService {
         ? payload.questions
         : decodeExamInstructions(null).questions;
 
-    const encodedInstructions = encodeExamInstructions(payload.summary, defaultQuestions);
+    const encodedInstructions = encodeExamInstructions(
+      payload.summary,
+      defaultQuestions,
+      payload.maxTabSwitches ?? MAX_ALLOWED_EXAM_TAB_SWITCHES
+    );
 
-    return prisma.$transaction(async (tx) => {
+    const createdExam = await prisma.$transaction(async (tx) => {
       const created = await tx.exam.create({
         data: {
           courseId: payload.courseId,
@@ -342,23 +544,154 @@ export class ExamsService {
             title: created.title,
             totalMarks: created.totalMarks.toFixed(2),
             questionCount: defaultQuestions.length,
+            maxTabSwitches: payload.maxTabSwitches ?? MAX_ALLOWED_EXAM_TAB_SWITCHES,
           }),
         },
       });
 
       return created;
     });
+
+    await OmnichannelMessagingService.dispatchToCourseCohort({
+      actorId: actor.id,
+      courseId: createdExam.courseId,
+      eventType: 'EXAM_PUBLISHED',
+      title: `New Examination Scheduled: ${createdExam.title}`,
+      body: `A new timed examination (${createdExam.title}) has been scheduled starting ${createdExam.startsAt.toISOString()}.`,
+    });
+
+    return createdExam;
   }
 
   /**
-   * Student submits an exam attempt.
+   * Real-time in-progress exam auto-save & anti-cheat proctoring heartbeat (`POST /api/v1/exams/:examId/save-progress`).
+   * Ensures students never lose selected answers if their browser refreshes or disconnects mid-exam,
+   * while recording tab-switch/blur/fullscreen proctoring violations on the server.
+   */
+  static async saveExamProgress(
+    actor: AuthenticatedActor,
+    examId: string,
+    payload: {
+      answers: Record<string, string>;
+      remainingSeconds?: number | null;
+      tabSwitchCount?: number;
+      fullscreenExits?: number;
+      copyPasteBlockedCount?: number;
+      violations?: ExamProctoringViolationEvent[];
+    }
+  ) {
+    if (actor.role !== 'STUDENT') {
+      throw ApiError.forbidden('Only enrolled students can save in-progress exam attempts.');
+    }
+
+    const exam = await prisma.exam.findUnique({
+      where: { id: examId },
+    });
+    if (!exam || exam.status !== 'PUBLISHED') {
+      throw ApiError.notFound('Published exam not found.');
+    }
+
+    await assertCourseAccessScope(actor, exam.courseId);
+
+    const decoded = decodeExamInstructions(exam.instructions);
+    const maxTabSwitches = decoded.maxTabSwitches ?? MAX_ALLOWED_EXAM_TAB_SWITCHES;
+
+    const existingAttempts = await prisma.examAttempt.findMany({
+      where: { examId: exam.id, studentId: actor.id },
+      orderBy: { attemptNumber: 'desc' },
+    });
+
+    let activeAttempt = existingAttempts.find((a) => a.status === 'IN_PROGRESS') || null;
+    const completedCount = existingAttempts.filter((a) => a.status !== 'IN_PROGRESS').length;
+
+    if (!activeAttempt && completedCount >= exam.attemptLimit) {
+      throw ApiError.conflict(
+        `You have already completed all ${exam.attemptLimit} allowed attempt(s) for this examination.`
+      );
+    }
+
+    const tabSwitchCount = Number(payload.tabSwitchCount || 0);
+    const fullscreenExits = Number(payload.fullscreenExits || 0);
+    const copyPasteBlockedCount = Number(payload.copyPasteBlockedCount || 0);
+    const integrityStatus = computeExamIntegrityStatus({
+      tabSwitchCount,
+      fullscreenExits,
+      autoSubmittedByProctor: false,
+      maxTabSwitches,
+    });
+
+    const nowIso = new Date().toISOString();
+    const metaPayload: ExamAttemptProctoringMeta = {
+      answers: payload.answers || {},
+      remainingSeconds:
+        typeof payload.remainingSeconds === 'number' ? payload.remainingSeconds : null,
+      tabSwitchCount,
+      fullscreenExits,
+      copyPasteBlockedCount,
+      autoSubmittedByProctor: false,
+      integrityStatus,
+      violations: payload.violations || [],
+      updatedAt: nowIso,
+    };
+
+    const savedAttempt = await prisma.$transaction(async (tx) => {
+      const att =
+        activeAttempt ||
+        (await tx.examAttempt.create({
+          data: {
+            examId: exam.id,
+            studentId: actor.id,
+            attemptNumber: existingAttempts.length + 1,
+            status: 'IN_PROGRESS',
+            startedAt: new Date(),
+          },
+        }));
+
+      await tx.auditLog.create({
+        data: {
+          actorUserId: actor.id,
+          action: 'EXAM_PROGRESS_AND_PROCTORING_SYNC',
+          entityType: 'ExamAttempt',
+          entityId: att.id,
+          afterDataJson: JSON.stringify(metaPayload),
+        },
+      });
+
+      return att;
+    });
+
+    return {
+      attemptId: savedAttempt.id,
+      examId: exam.id,
+      attemptNumber: savedAttempt.attemptNumber,
+      status: savedAttempt.status,
+      savedQuestionCount: Object.keys(metaPayload.answers).length,
+      remainingSeconds: metaPayload.remainingSeconds,
+      tabSwitchCount,
+      maxTabSwitches,
+      integrityStatus,
+      shouldAutoSubmit: tabSwitchCount >= maxTabSwitches || fullscreenExits >= maxTabSwitches,
+      savedAt: nowIso,
+    };
+  }
+
+  /**
+   * Student submits an exam attempt (`POST /api/v1/exams/:examId/submit-attempt`).
    * Auto-grades objective questions (`MCQ_SINGLE`, `TRUE_FALSE`) against the server-stored question bank,
-   * computes letter grade, and enforces `resultPublishAt` visibility rules (O-022).
+   * finalizes any `IN_PROGRESS` attempt, records proctoring integrity telemetry,
+   * and enforces `resultPublishAt` visibility rules (O-022).
    */
   static async submitExamAttempt(
     actor: AuthenticatedActor,
     examId: string,
-    payload: { answers: Record<string, string> }
+    payload: {
+      answers: Record<string, string>;
+      tabSwitchCount?: number;
+      fullscreenExits?: number;
+      copyPasteBlockedCount?: number;
+      autoSubmittedByProctor?: boolean;
+      violations?: ExamProctoringViolationEvent[];
+    }
   ) {
     if (actor.role !== 'STUDENT') {
       throw ApiError.forbidden('Only enrolled students can submit exam attempts.');
@@ -373,10 +706,17 @@ export class ExamsService {
 
     await assertCourseAccessScope(actor, exam.courseId);
 
-    const existingAttemptsCount = await prisma.examAttempt.count({
+    const existingAttempts = await prisma.examAttempt.findMany({
       where: { examId: exam.id, studentId: actor.id },
+      orderBy: { attemptNumber: 'desc' },
     });
-    if (existingAttemptsCount >= exam.attemptLimit) {
+
+    const inProgressAttempt = existingAttempts.find((a) => a.status === 'IN_PROGRESS') || null;
+    const completedAttemptsCount = existingAttempts.filter(
+      (a) => a.status !== 'IN_PROGRESS'
+    ).length;
+
+    if (!inProgressAttempt && completedAttemptsCount >= exam.attemptLimit) {
       throw ApiError.conflict(
         `You have already used all ${exam.attemptLimit} allowed attempt(s) for this examination.`
       );
@@ -404,20 +744,54 @@ export class ExamsService {
     const grade = computeLetterGrade(scorePercent);
     const now = new Date();
 
-    const createdAttempt = await prisma.$transaction(async (tx) => {
-      const att = await tx.examAttempt.create({
-        data: {
-          examId: exam.id,
-          studentId: actor.id,
-          attemptNumber: existingAttemptsCount + 1,
-          status: 'EVALUATED',
-          score: new Prisma.Decimal(normalizedScore.toFixed(2)),
-          grade,
-          startedAt: now,
-          submittedAt: now,
-          evaluatedAt: now,
-        },
-      });
+    const tabSwitchCount = Number(payload.tabSwitchCount || 0);
+    const fullscreenExits = Number(payload.fullscreenExits || 0);
+    const copyPasteBlockedCount = Number(payload.copyPasteBlockedCount || 0);
+    const autoSubmittedByProctor = Boolean(payload.autoSubmittedByProctor);
+    const integrityStatus = computeExamIntegrityStatus({
+      tabSwitchCount,
+      fullscreenExits,
+      autoSubmittedByProctor,
+      maxTabSwitches: decoded.maxTabSwitches,
+    });
+
+    const proctoringMeta: ExamAttemptProctoringMeta = {
+      answers: payload.answers || {},
+      remainingSeconds: 0,
+      tabSwitchCount,
+      fullscreenExits,
+      copyPasteBlockedCount,
+      autoSubmittedByProctor,
+      integrityStatus,
+      violations: payload.violations || [],
+      updatedAt: now.toISOString(),
+    };
+
+    const finalizedAttempt = await prisma.$transaction(async (tx) => {
+      const att = inProgressAttempt
+        ? await tx.examAttempt.update({
+            where: { id: inProgressAttempt.id },
+            data: {
+              status: 'EVALUATED',
+              score: new Prisma.Decimal(normalizedScore.toFixed(2)),
+              grade,
+              submittedAt: now,
+              evaluatedAt: now,
+            },
+          })
+        : await tx.examAttempt.create({
+            data: {
+              examId: exam.id,
+              studentId: actor.id,
+              attemptNumber: existingAttempts.length + 1,
+              status: 'EVALUATED',
+              score: new Prisma.Decimal(normalizedScore.toFixed(2)),
+              grade,
+              startedAt: now,
+              submittedAt: now,
+              evaluatedAt: now,
+            },
+          });
 
       await tx.auditLog.create({
         data: {
@@ -425,10 +799,14 @@ export class ExamsService {
           action: 'EXAM_ATTEMPT_SUBMITTED_AND_AUTOGRADED',
           entityType: 'ExamAttempt',
           entityId: att.id,
+          reason: autoSubmittedByProctor
+            ? `Auto-submitted by anti-cheat proctor (tabSwitches=${tabSwitchCount}, fullscreenExits=${fullscreenExits})`
+            : 'Submitted by student',
           afterDataJson: JSON.stringify({
             examId: exam.id,
             attemptNumber: att.attemptNumber,
             status: att.status,
+            ...proctoringMeta,
           }),
         },
       });
@@ -440,13 +818,18 @@ export class ExamsService {
       !exam.resultPublishAt || now.getTime() >= exam.resultPublishAt.getTime();
 
     return {
-      attemptId: createdAttempt.id,
+      attemptId: finalizedAttempt.id,
       examId: exam.id,
-      attemptNumber: createdAttempt.attemptNumber,
-      status: createdAttempt.status,
+      attemptNumber: finalizedAttempt.attemptNumber,
+      status: finalizedAttempt.status,
       isResultPublished,
-      score: isResultPublished ? createdAttempt.score?.toFixed(2) : null,
-      grade: isResultPublished ? createdAttempt.grade : 'PENDING_PUBLISH',
+      score: isResultPublished ? finalizedAttempt.score?.toFixed(2) : null,
+      grade: isResultPublished ? finalizedAttempt.grade : 'PENDING_PUBLISH',
+      tabSwitchCount,
+      fullscreenExits,
+      copyPasteBlockedCount,
+      autoSubmittedByProctor,
+      integrityStatus,
       submittedAt: now.toISOString(),
     };
   }
@@ -777,6 +1160,21 @@ export class ExamsController {
     return apiResponse(res, 201, 'Examination and question bank created', created);
   });
 
+  static saveProgress = catchAsync(async (req: Request, res: Response) => {
+    if (!req.user) throw ApiError.unauthorized();
+    const result = await ExamsService.saveExamProgress(
+      req.user,
+      String(req.params.examId),
+      req.body
+    );
+    return apiResponse(
+      res,
+      200,
+      'Exam progress and proctoring telemetry saved',
+      result
+    );
+  });
+
   static submitAttempt = catchAsync(async (req: Request, res: Response) => {
     if (!req.user) throw ApiError.unauthorized();
     const result = await ExamsService.submitExamAttempt(
@@ -814,6 +1212,12 @@ examsRouter.post(
   authorizeRoles('ADMIN', 'TEACHER'),
   validateRequest(createExamValidation),
   ExamsController.create
+);
+examsRouter.post(
+  '/:examId/save-progress',
+  authorizeRoles('STUDENT'),
+  validateRequest(saveExamProgressValidation),
+  ExamsController.saveProgress
 );
 examsRouter.post(
   '/:examId/submit-attempt',

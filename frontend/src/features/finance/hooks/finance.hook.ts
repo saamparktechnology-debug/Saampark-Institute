@@ -7,7 +7,92 @@ import { financeService } from '../services/finance.service';
 export function usePaymentsListQuery(filters?: Record<string, string | number>) {
   return useQuery({
     queryKey: queryKeys.finance.payments(filters),
-    queryFn: () => financeService.listPaymentTransactions(filters),
+    queryFn: () => financeService.listPayments(filters),
+  });
+}
+
+export function useCreatePaymentOrderMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: financeService.createPaymentOrder,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.finance.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.enrollments.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.dashboards.all });
+    },
+  });
+}
+
+export function useVerifyRazorpayCheckoutMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: financeService.verifyRazorpayCheckout,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.finance.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.enrollments.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.courses.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.dashboards.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.operations.notifications() });
+    },
+  });
+}
+
+export function useUpdatePaymentGstDetailsMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      transactionId,
+      customerGstin,
+      placeOfSupplyState,
+    }: {
+      transactionId: string;
+      customerGstin?: string | null;
+      placeOfSupplyState: string;
+    }) =>
+      financeService.updatePaymentGstDetails(transactionId, {
+        customerGstin,
+        placeOfSupplyState,
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.finance.all });
+    },
+  });
+}
+
+export function useRefundPaymentMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ transactionId, reason }: { transactionId: string; reason: string }) =>
+      financeService.refundPayment(transactionId, reason),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.finance.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.enrollments.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.dashboards.all });
+    },
+  });
+}
+
+export function useExtendInstallmentScheduleMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      enrollmentId,
+      extensionDays,
+      reason,
+    }: {
+      enrollmentId: string;
+      extensionDays: number;
+      reason: string;
+    }) =>
+      financeService.extendInstallmentSchedule(enrollmentId, {
+        extensionDays,
+        reason,
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.enrollments.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.finance.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.dashboards.all });
+    },
   });
 }
 
@@ -18,7 +103,7 @@ export function useMyWalletQuery() {
   });
 }
 
-export function useAdminAllWalletsQuery() {
+export function useAllWalletsAdminQuery() {
   return useQuery({
     queryKey: queryKeys.finance.allWallets(),
     queryFn: () => financeService.listAllWalletsForAdmin(),
@@ -32,24 +117,10 @@ export function useRedemptionsListQuery() {
   });
 }
 
-export function useReferralsListQuery() {
-  return useQuery({
-    queryKey: queryKeys.finance.referrals(),
-    queryFn: () => financeService.listReferrals(),
-  });
-}
-
-export function useTeacherPayoutsQuery() {
-  return useQuery({
-    queryKey: queryKeys.finance.teacherPayouts(),
-    queryFn: () => financeService.listTeacherPayouts(),
-  });
-}
-
-export function useRequestUpiRedemptionMutation() {
+export function useCreateRedemptionMutation() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: financeService.requestUpiRedemption,
+    mutationFn: financeService.createRedemption,
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.finance.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.dashboards.all });
@@ -57,7 +128,7 @@ export function useRequestUpiRedemptionMutation() {
   });
 }
 
-export function useReviewUpiRedemptionMutation() {
+export function useReviewRedemptionMutation() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({
@@ -71,7 +142,7 @@ export function useReviewUpiRedemptionMutation() {
       payoutReference?: string;
       rejectionReason?: string;
     }) =>
-      financeService.reviewUpiRedemption(redemptionId, {
+      financeService.reviewRedemption(redemptionId, {
         decision,
         payoutReference,
         rejectionReason,
@@ -83,16 +154,17 @@ export function useReviewUpiRedemptionMutation() {
   });
 }
 
-export function useRefundTransactionMutation() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({ transactionId, reason }: { transactionId: string; reason: string }) =>
-      financeService.refundTransaction(transactionId, reason),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.finance.all });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.enrollments.all });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.dashboards.all });
-    },
+export function useReferralsQuery() {
+  return useQuery({
+    queryKey: queryKeys.finance.referrals(),
+    queryFn: () => financeService.listReferrals(),
+  });
+}
+
+export function useTeacherPayoutsQuery() {
+  return useQuery({
+    queryKey: queryKeys.finance.teacherPayouts(),
+    queryFn: () => financeService.listTeacherPayouts(),
   });
 }
 
@@ -102,12 +174,11 @@ export function useGenerateTeacherPayoutMutation() {
     mutationFn: financeService.generateTeacherPayout,
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.finance.teacherPayouts() });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.dashboards.all });
     },
   });
 }
 
-export function useSettleTeacherPayoutMutation() {
+export function useUpdateTeacherPayoutStatusMutation() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({
@@ -118,9 +189,14 @@ export function useSettleTeacherPayoutMutation() {
       payoutId: string;
       status: 'APPROVED' | 'PAID' | 'CANCELLED';
       paymentReference?: string;
-    }) => financeService.settleTeacherPayout(payoutId, { status, paymentReference }),
+    }) => financeService.updateTeacherPayoutStatus(payoutId, { status, paymentReference }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.finance.teacherPayouts() });
     },
   });
 }
+
+// Backwards-compatible aliases
+export const useReviewUpiRedemptionMutation = useReviewRedemptionMutation;
+export const useReferralsListQuery = useReferralsQuery;
+export const useRequestUpiRedemptionMutation = useCreateRedemptionMutation;

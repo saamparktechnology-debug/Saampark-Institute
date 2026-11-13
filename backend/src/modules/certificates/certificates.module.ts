@@ -101,6 +101,7 @@ export class CertificatesService {
       certificateNumber: c.certificateNumber,
       status: c.status,
       fileReference: c.fileReference,
+      publicVerificationPath: `/verify-certificate?code=${encodeURIComponent(c.certificateNumber)}`,
       issuedAt: c.issuedAt.toISOString(),
       revokedAt: c.revokedAt ? c.revokedAt.toISOString() : null,
       revocationReason: c.revocationReason,
@@ -201,7 +202,7 @@ export class CertificatesService {
 
     const certSuffix = crypto.randomBytes(3).toString('hex').toUpperCase();
     const certificateNumber = `CERT-ARGON-${new Date().getFullYear()}-${enrollment.course.code}-${certSuffix}`;
-    const fileReference = `/api/v1/certificates/verify/${certificateNumber}`;
+    const fileReference = `/verify-certificate?code=${encodeURIComponent(certificateNumber)}`;
 
     return prisma.$transaction(async (tx) => {
       await tx.enrollment.update({
@@ -301,14 +302,29 @@ export class CertificatesService {
   }
 
   /**
-   * Verifies a certificate by its unique `certificateNumber` (`O-023`).
+   * Publicly verifies a certificate by its unique `certificateNumber` (`O-023`).
+   * Accessible without authentication for public verification URLs and QR codes.
    */
   static async verifyByCertificateNumber(certificateNumber: string) {
+    const normalized = decodeURIComponent(certificateNumber).trim().toUpperCase();
     const cert = await prisma.certificate.findUnique({
-      where: { certificateNumber: certificateNumber.trim().toUpperCase() },
+      where: { certificateNumber: normalized },
       include: {
-        student: { select: { fullName: true } },
-        course: { select: { code: true, title: true } },
+        student: {
+          select: {
+            fullName: true,
+            studentProfile: { select: { studentCode: true } },
+          },
+        },
+        course: {
+          select: {
+            code: true,
+            title: true,
+            level: true,
+            minAttendancePercent: true,
+            minPassMarksPercent: true,
+          },
+        },
       },
     });
 
@@ -321,8 +337,13 @@ export class CertificatesService {
       certificateNumber: cert.certificateNumber,
       status: cert.status,
       studentName: cert.student.fullName,
+      studentCode: cert.student.studentProfile?.studentCode || null,
       courseCode: cert.course.code,
       courseTitle: cert.course.title,
+      courseLevel: cert.course.level,
+      minAttendancePercent: cert.course.minAttendancePercent.toFixed(0),
+      minPassMarksPercent: cert.course.minPassMarksPercent.toFixed(0),
+      publicVerificationPath: `/verify-certificate?code=${encodeURIComponent(cert.certificateNumber)}`,
       issuedAt: cert.issuedAt.toISOString(),
       revokedAt: cert.revokedAt ? cert.revokedAt.toISOString() : null,
       revocationReason: cert.revocationReason,

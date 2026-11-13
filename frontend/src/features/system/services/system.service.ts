@@ -58,4 +58,23 @@ export const systemService = {
     const res = await apiClient.get<ApiEnvelope<VpsReadinessData>>('/system/vps-readiness');
     return res.data.data;
   },
+
+  async sendInstallmentReminders(): Promise<{
+    remindedInstallmentsCount: number;
+    uniqueStudentsNotified: number;
+    channelsDispatched: string[];
+    skippedChannels: string[];
+    dispatchedAt: string;
+  }> {
+    const res = await apiClient.post<
+      ApiEnvelope<{
+        remindedInstallmentsCount: number;
+        uniqueStudentsNotified: number;
+        channelsDispatched: string[];
+        skippedChannels: string[];
+        dispatchedAt: string;
+      }>
+    >('/system/reminders/installments');
+    return res.data.data;
+  },
 };

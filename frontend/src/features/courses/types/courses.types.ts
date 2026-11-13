@@ -53,6 +53,7 @@ export interface CourseLessonItem {
   durationSeconds: number;
   sortOrder: number;
   isPreview: boolean;
+  isCompleted?: boolean;
 }
 
 export interface CourseSectionItem {
@@ -89,6 +90,8 @@ export interface CourseItem {
   paymentPlanTemplates: PaymentPlanTemplateItem[];
   sections?: CourseSectionItem[];
   enrollmentCount: number;
+  completedLessonIds?: string[];
+  studentProgressPercent?: string;
 }
 
 export interface CourseMaterialItem {
@@ -106,11 +109,24 @@ export interface CourseMaterialItem {
   createdAt: string;
 }
 
+export interface EnrollmentOnboardingState {
+  enrollmentId: string;
+  step1PlanAndPaymentVerified: boolean;
+  step2AcademicPolicyAccepted: boolean;
+  step3WhatsappAlertsOptIn: boolean;
+  whatsappNumber: string;
+  step4StarterKitAndFirstLesson: boolean;
+  completedStepsCount: number;
+  isCompleted: boolean;
+  completedAt: string | null;
+}
+
 export interface EnrollmentItem {
   id: string;
   studentId: string;
   studentFullName: string;
   studentEmail: string;
+  studentPhone?: string | null;
   courseId: string;
   courseCode: string;
   courseTitle: string;
@@ -134,7 +150,80 @@ export interface EnrollmentItem {
     currency: string;
     dueAt: string;
     graceEndsAt: string;
-    status: 'PENDING' | 'PAID' | 'OVERDUE' | 'CANCELLED';
+    status: 'PENDING' | 'PAID' | 'OVERDUE' | 'WAIVED' | 'CANCELLED';
     paidAt: string | null;
   }>;
+  onboarding?: EnrollmentOnboardingState;
+}
+
+export interface CourseLessonProgressResult {
+  courseId: string;
+  enrollmentId: string;
+  completedLessonIds: string[];
+  completedCount: number;
+  totalLessons: number;
+  progressPercent: string;
+}
+
+export interface TeacherCohortStudentItem {
+  enrollmentId: string;
+  studentId: string;
+  studentName: string;
+  studentEmail: string;
+  studentPhone: string | null;
+  studentCode: string | null;
+  courseId: string;
+  courseCode: string;
+  courseTitle: string;
+  enrollmentStatus:
+    | 'PENDING_PAYMENT'
+    | 'ACTIVE'
+    | 'SUSPENDED_OVERDUE'
+    | 'COMPLETED'
+    | 'CANCELLED'
+    | 'REFUNDED';
+  progressPercent: string;
+  paidInstallmentsCount: number;
+  totalInstallmentsCount: number;
+  onboardingCompleted: boolean;
+  enrolledAt: string;
+}
+
+export interface CourseDoubtReplyItem {
+  id: string;
+  doubtId: string;
+  senderId: string;
+  senderName: string;
+  senderRole: 'ADMIN' | 'STUDENT' | 'TEACHER' | 'SUPPORT';
+  message: string;
+  createdAt: string;
+}
+
+export interface CourseDoubtThreadItem {
+  id: string;
+  courseId: string;
+  lessonTitle: string | null;
+  subject: string;
+  question: string;
+  studentId: string;
+  studentName: string;
+  status: 'OPEN' | 'RESOLVED';
+  createdAt: string;
+  replies: CourseDoubtReplyItem[];
+}
+
+export interface MaterialDownloadPayload {
+  id: string;
+  courseId: string;
+  courseCode: string;
+  courseTitle: string;
+  title: string;
+  description: string | null;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  signedDownloadUrl?: string;
+  fileBase64?: string | null;
+  studyGuideText: string;
+  downloadedAt: string;
 }

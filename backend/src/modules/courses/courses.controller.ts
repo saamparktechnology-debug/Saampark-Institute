@@ -23,6 +23,12 @@ export class CoursesController {
     return apiResponse(res, 200, 'Courses retrieved successfully', result.items, result.meta);
   });
 
+  static listTeacherStudentsRoster = catchAsync(async (req: Request, res: Response) => {
+    if (!req.user) throw ApiError.unauthorized();
+    const roster = await CoursesService.listTeacherStudentsRoster(req.user);
+    return apiResponse(res, 200, 'Cohort student roster retrieved successfully', roster);
+  });
+
   static getCourseDetail = catchAsync(async (req: Request, res: Response) => {
     if (!req.user) throw ApiError.unauthorized();
     const detail = await CoursesService.getCourseDetail(req.user, String(req.params.courseId));
@@ -80,5 +86,66 @@ export class CoursesController {
       req.body
     );
     return apiResponse(res, 201, 'Course lesson created', lesson);
+  });
+
+  static toggleLessonComplete = catchAsync(async (req: Request, res: Response) => {
+    if (!req.user) throw ApiError.unauthorized();
+    const progress = await CoursesService.toggleLessonCompletion(
+      req.user,
+      String(req.params.courseId),
+      String(req.params.lessonId),
+      req.body?.completed
+    );
+    return apiResponse(
+      res,
+      200,
+      'Lesson completion and course progress updated',
+      progress
+    );
+  });
+
+  static broadcastAnnouncement = catchAsync(async (req: Request, res: Response) => {
+    if (!req.user) throw ApiError.unauthorized();
+    const result = await CoursesService.broadcastCourseAnnouncement(
+      req.user,
+      String(req.params.courseId),
+      req.body
+    );
+    return apiResponse(
+      res,
+      200,
+      'Course announcement broadcasted to enrolled cohort',
+      result
+    );
+  });
+
+  static listDoubts = catchAsync(async (req: Request, res: Response) => {
+    if (!req.user) throw ApiError.unauthorized();
+    const list = await CoursesService.listCourseDoubts(
+      req.user,
+      String(req.params.courseId)
+    );
+    return apiResponse(res, 200, 'Course Q&A doubts retrieved', list);
+  });
+
+  static createDoubt = catchAsync(async (req: Request, res: Response) => {
+    if (!req.user) throw ApiError.unauthorized();
+    const created = await CoursesService.createCourseDoubt(
+      req.user,
+      String(req.params.courseId),
+      req.body
+    );
+    return apiResponse(res, 201, 'Course doubt posted successfully', created);
+  });
+
+  static replyDoubt = catchAsync(async (req: Request, res: Response) => {
+    if (!req.user) throw ApiError.unauthorized();
+    const reply = await CoursesService.replyToCourseDoubt(
+      req.user,
+      String(req.params.courseId),
+      String(req.params.doubtId),
+      req.body
+    );
+    return apiResponse(res, 201, 'Doubt reply recorded and student notified', reply);
   });
 }

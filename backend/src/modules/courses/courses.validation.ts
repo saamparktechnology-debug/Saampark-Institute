@@ -99,3 +99,44 @@ export const createLessonValidation = {
     isPreview: z.boolean().default(false),
   }),
 };
+
+export const toggleLessonCompleteValidation = {
+  params: z.object({
+    courseId: z.string().uuid(),
+    lessonId: z.string().uuid(),
+  }),
+  body: z.object({
+    completed: z.boolean().optional(),
+  }),
+};
+
+export const broadcastCourseAnnouncementValidation = {
+  params: z.object({
+    courseId: z.string().uuid(),
+  }),
+  body: z.object({
+    title: z.string().trim().min(3).max(200),
+    body: z.string().trim().min(5).max(2000),
+  }),
+};
+
+export const createCourseDoubtValidation = {
+  params: z.object({
+    courseId: z.string().uuid(),
+  }),
+  body: z.object({
+    lessonTitle: z.string().trim().max(200).optional(),
+    subject: z.string().trim().min(3).max(200),
+    question: z.string().trim().min(5).max(2000),
+  }),
+};
+
+export const replyCourseDoubtValidation = {
+  params: z.object({
+    courseId: z.string().uuid(),
+    doubtId: z.string().uuid(),
+  }),
+  body: z.object({
+    message: z.string().trim().min(2).max(2000),
+  }),
+};

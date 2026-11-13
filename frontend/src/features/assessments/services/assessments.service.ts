@@ -5,11 +5,15 @@ import {
   CertificateItem,
   CertificateVerificationResult,
   ExamItem,
+  ExamProctoringViolationEvent,
+  ExamQuestionItem,
   PerformanceAnalyticsData,
 } from '../types/assessments.types';
 
 /**
- * 100% API-driven service for Phase 5 Assignments, Examinations, Performance Analytics & Verifiable Certificates.
+ * 100% API-driven service for Phase 5, Phase 10 & Phase 11 Assignments,
+ * Standard CBT Examinations (with Dynamic Question Bank Builder, Proctoring & Auto-Save),
+ * Performance Analytics & Verifiable Certificates.
  * Zero hardcoded mock arrays.
  */
 export const assessmentsService = {
@@ -56,7 +60,7 @@ export const assessmentsService = {
     return res.data.data;
   },
 
-  // 2. Examinations & Results
+  // 2. Examinations, Dynamic Question Bank, Proctoring Auto-Save & Results
   async listExams(params?: Record<string, string | number>): Promise<ExamItem[]> {
     const res = await apiClient.get<ApiEnvelope<ExamItem[]>>('/exams', { params });
     return res.data.data;
@@ -73,15 +77,45 @@ export const assessmentsService = {
     startsAt: string;
     endsAt: string;
     resultPublishAt?: string | null;
+    maxTabSwitches?: number;
+    questions?: ExamQuestionItem[];
   }) {
     const res = await apiClient.post<ApiEnvelope<unknown>>('/exams', payload);
     return res.data.data;
   },
 
-  async submitExamAttempt(examId: string, answers: Record<string, string>) {
+  async saveExamProgress(
+    examId: string,
+    payload: {
+      answers: Record<string, string>;
+      remainingSeconds?: number | null;
+      tabSwitchCount?: number;
+      fullscreenExits?: number;
+      copyPasteBlockedCount?: number;
+      violations?: ExamProctoringViolationEvent[];
+    }
+  ) {
+    const res = await apiClient.post<ApiEnvelope<unknown>>(
+      `/exams/${examId}/save-progress`,
+      payload
+    );
+    return res.data.data;
+  },
+
+  async submitExamAttempt(
+    examId: string,
+    payload: {
+      answers: Record<string, string>;
+      tabSwitchCount?: number;
+      fullscreenExits?: number;
+      copyPasteBlockedCount?: number;
+      autoSubmittedByProctor?: boolean;
+      violations?: ExamProctoringViolationEvent[];
+    }
+  ) {
     const res = await apiClient.post<ApiEnvelope<unknown>>(
       `/exams/${examId}/submit-attempt`,
-      { answers }
+      payload
     );
     return res.data.data;
   },

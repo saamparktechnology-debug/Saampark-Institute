@@ -1,5 +1,5 @@
-import { StudentCoursesCatalogView } from '@/features/courses';
+import { StudentInstallmentsAndDuesView } from '@/features/courses';
 
 export default function StudentEnrollmentsPage() {
-  return <StudentCoursesCatalogView />;
+  return <StudentInstallmentsAndDuesView />;
 }

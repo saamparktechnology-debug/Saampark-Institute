@@ -1,14 +1,15 @@
-"use client";
+'use client';
 
-import React from "react";
+import React from 'react';
+import { useTheme } from '@/providers/AppProviders';
 import {
   ChartLabelValue,
   HeatmapCellPoint,
   StackedSeriesPoint,
-} from "../types/dashboards.types";
+} from '../types/dashboards.types';
 
 // ============================================================================
-// REUSABLE CHART CARD WRAPPER
+// REUSABLE CHART CARD WRAPPER (Explicit Dark/Light Mode Surface & Text)
 // ============================================================================
 
 export function ChartCardShell({
@@ -22,16 +23,34 @@ export function ChartCardShell({
   chartTypeBadge: string;
   children: React.ReactNode;
 }) {
+  const { theme } = useTheme();
+  const isDark = theme === 'dark';
+
   return (
-    <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] p-5 shadow-sm flex flex-col justify-between gap-4">
+    <div
+      style={{
+        backgroundColor: isDark ? '#111827' : '#FFFFFF',
+        borderColor: isDark ? '#1E293B' : '#E2E8F0',
+        color: isDark ? '#F8FAFC' : '#0F172A',
+      }}
+      className="rounded-2xl border p-5 shadow-sm flex flex-col justify-between gap-4 transition-colors duration-300"
+    >
       <div className="flex items-start justify-between gap-2">
         <div>
-          <h3 className="text-sm font-bold tracking-tight">{title}</h3>
-          <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+          <h3
+            style={{ color: isDark ? '#F8FAFC' : '#0F172A' }}
+            className="text-sm font-bold tracking-tight"
+          >
+            {title}
+          </h3>
+          <p
+            style={{ color: isDark ? '#94A3B8' : '#64748B' }}
+            className="text-[11px] mt-0.5"
+          >
             {subtitle}
           </p>
         </div>
-        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-violet-500/15 text-violet-400 border border-violet-500/30 shrink-0">
+        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-violet-500/15 text-violet-600 dark:text-violet-400 border border-violet-500/30 shrink-0">
           {chartTypeBadge}
         </span>
       </div>
@@ -46,24 +65,25 @@ export function ChartCardShell({
 
 export function SvgLineChart({
   data,
-  lineColor = "#06B6D4",
-  secondaryColor = "#F59E0B",
-  unitSuffix = "",
+  lineColor = '#06B6D4',
+  secondaryColor = '#F59E0B',
+  unitSuffix = '',
 }: {
   data: Array<{ label: string; primary: number; secondary?: number }>;
   lineColor?: string;
   secondaryColor?: string;
   unitSuffix?: string;
 }) {
+  const { theme } = useTheme();
+  const isDark = theme === 'dark';
+
   const safeData =
     data.length >= 2
       ? data
       : [
-          ...(data.length === 1
-            ? data
-            : [{ label: "Start", primary: 0, secondary: 50 }]),
+          ...(data.length === 1 ? data : [{ label: 'Start', primary: 0, secondary: 50 }]),
           {
-            label: "Current",
+            label: 'Current',
             primary: data[0]?.primary ?? 85,
             secondary: data[0]?.secondary ?? 50,
           },
@@ -75,13 +95,14 @@ export function SvgLineChart({
   const padY = 24;
   const maxVal = Math.max(
     10,
-    ...safeData.map((d) => Math.max(d.primary, d.secondary ?? 0)),
+    ...safeData.map((d) => Math.max(d.primary, d.secondary ?? 0))
   );
 
   const coords = safeData.map((d, idx) => {
     const x =
       padX + (idx / Math.max(1, safeData.length - 1)) * (width - padX * 2);
-    const y = height - padY - (d.primary / maxVal) * (height - padY * 2);
+    const y =
+      height - padY - (d.primary / maxVal) * (height - padY * 2);
     const y2 =
       d.secondary !== undefined
         ? height - padY - (d.secondary / maxVal) * (height - padY * 2)
@@ -89,18 +110,15 @@ export function SvgLineChart({
     return { ...d, x, y, y2 };
   });
 
-  const primaryPoints = coords.map((c) => `${c.x},${c.y}`).join(" ");
+  const primaryPoints = coords.map((c) => `${c.x},${c.y}`).join(' ');
   const secondaryPoints = coords
     .filter((c) => c.y2 !== null)
     .map((c) => `${c.x},${c.y2}`)
-    .join(" ");
+    .join(' ');
 
   return (
     <div className="space-y-2">
-      <svg
-        viewBox={`0 0 ${width} ${height}`}
-        className="w-full h-44 overflow-visible"
-      >
+      <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-44 overflow-visible">
         {[0.25, 0.5, 0.75, 1].map((ratio) => {
           const y = height - padY - ratio * (height - padY * 2);
           return (
@@ -110,14 +128,14 @@ export function SvgLineChart({
                 y1={y}
                 x2={width - padX}
                 y2={y}
-                stroke="currentColor"
-                className="text-slate-200 dark:text-slate-800"
+                stroke={isDark ? '#1E293B' : '#E2E8F0'}
                 strokeDasharray="4 4"
               />
               <text
                 x={4}
                 y={y + 3}
-                className="fill-slate-400 text-[9px] font-mono"
+                fill={isDark ? '#94A3B8' : '#64748B'}
+                className="text-[9px] font-mono"
               >
                 {Math.round(maxVal * ratio)}
                 {unitSuffix}
@@ -152,14 +170,15 @@ export function SvgLineChart({
               cy={c.y}
               r="4.5"
               fill={lineColor}
-              className="stroke-white dark:stroke-slate-900"
+              stroke={isDark ? '#0F172A' : '#FFFFFF'}
               strokeWidth="2"
             />
             <text
               x={c.x}
               y={c.y - 8}
               textAnchor="middle"
-              className="fill-slate-600 dark:fill-slate-300 text-[9px] font-bold font-mono"
+              fill={isDark ? '#E2E8F0' : '#0F172A'}
+              className="text-[9px] font-bold font-mono"
             >
               {c.primary}
               {unitSuffix}
@@ -168,7 +187,8 @@ export function SvgLineChart({
               x={c.x}
               y={height - 6}
               textAnchor="middle"
-              className="fill-slate-400 text-[9px]"
+              fill={isDark ? '#94A3B8' : '#64748B'}
+              className="text-[9px]"
             >
               {c.label.slice(0, 10)}
             </text>
@@ -185,24 +205,24 @@ export function SvgLineChart({
 
 export function SvgAreaChart({
   data,
-  strokeColor = "#8B5CF6",
-  gradientId = "argonAreaGrad",
-  unitSuffix = "",
+  strokeColor = '#8B5CF6',
+  gradientId = 'argonAreaGrad',
+  unitSuffix = '',
 }: {
   data: Array<{ label: string; value: number }>;
   strokeColor?: string;
   gradientId?: string;
   unitSuffix?: string;
 }) {
+  const { theme } = useTheme();
+  const isDark = theme === 'dark';
+
   const safeData =
     data.length >= 2
       ? data
       : [
-          {
-            label: "Base",
-            value: Math.max(5, Math.round((data[0]?.value ?? 40) * 0.6)),
-          },
-          ...(data.length === 1 ? data : [{ label: "Now", value: 60 }]),
+          { label: 'Base', value: Math.max(5, Math.round((data[0]?.value ?? 40) * 0.6)) },
+          ...(data.length === 1 ? data : [{ label: 'Now', value: 60 }]),
         ];
 
   const width = 460;
@@ -214,24 +234,22 @@ export function SvgAreaChart({
   const coords = safeData.map((d, idx) => {
     const x =
       padX + (idx / Math.max(1, safeData.length - 1)) * (width - padX * 2);
-    const y = height - padY - (d.value / maxVal) * (height - padY * 2);
+    const y =
+      height - padY - (d.value / maxVal) * (height - padY * 2);
     return { ...d, x, y };
   });
 
-  const linePts = coords.map((c) => `${c.x},${c.y}`).join(" ");
+  const linePts = coords.map((c) => `${c.x},${c.y}`).join(' ');
   const areaPts = `${coords[0].x},${height - padY} ${linePts} ${
     coords[coords.length - 1].x
   },${height - padY}`;
 
   return (
-    <svg
-      viewBox={`0 0 ${width} ${height}`}
-      className="w-full h-44 overflow-visible"
-    >
+    <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-44 overflow-visible">
       <defs>
         <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor={strokeColor} stopOpacity="0.45" />
-          <stop offset="100%" stopColor={strokeColor} stopOpacity="0.02" />
+          <stop offset="100%" stopColor={strokeColor} stopOpacity="0.04" />
         </linearGradient>
       </defs>
 
@@ -251,7 +269,8 @@ export function SvgAreaChart({
             x={c.x}
             y={c.y - 8}
             textAnchor="middle"
-            className="fill-slate-600 dark:fill-slate-200 text-[9px] font-mono font-bold"
+            fill={isDark ? '#E2E8F0' : '#0F172A'}
+            className="text-[9px] font-mono font-bold"
           >
             {c.value}
             {unitSuffix}
@@ -260,7 +279,8 @@ export function SvgAreaChart({
             x={c.x}
             y={height - 6}
             textAnchor="middle"
-            className="fill-slate-400 text-[9px]"
+            fill={isDark ? '#94A3B8' : '#64748B'}
+            className="text-[9px]"
           >
             {c.label.slice(0, 10)}
           </text>
@@ -282,17 +302,18 @@ export function SvgStackedAreaChart({
   seriesMeta: [
     { label: string; color: string },
     { label: string; color: string },
-    { label: string; color: string },
+    { label: string; color: string }
   ];
 }) {
+  const { theme } = useTheme();
+  const isDark = theme === 'dark';
+
   const safeData =
     data.length >= 2
       ? data
       : [
-          { label: "P1", s1: 200, s2: 100, s3: 50 },
-          ...(data.length === 1
-            ? data
-            : [{ label: "P2", s1: 500, s2: 200, s3: 100 }]),
+          { label: 'P1', s1: 200, s2: 100, s3: 50 },
+          ...(data.length === 1 ? data : [{ label: 'P2', s1: 500, s2: 200, s3: 100 }]),
         ];
 
   const width = 460;
@@ -308,57 +329,32 @@ export function SvgStackedAreaChart({
   const getY = (val: number) =>
     height - padY - (val / maxTotal) * (height - padY * 2);
 
-  // Layer 3 (top cumulative: s1 + s2 + s3)
-  const topPts = safeData
-    .map((d, i) => `${getX(i)},${getY(d.s1 + d.s2 + d.s3)}`)
-    .join(" ");
+  const topPts = safeData.map((d, i) => `${getX(i)},${getY(d.s1 + d.s2 + d.s3)}`).join(' ');
   const poly3 = `${getX(0)},${height - padY} ${topPts} ${getX(safeData.length - 1)},${
     height - padY
   }`;
 
-  // Layer 2 (middle cumulative: s1 + s2)
-  const midPts = safeData
-    .map((d, i) => `${getX(i)},${getY(d.s1 + d.s2)}`)
-    .join(" ");
+  const midPts = safeData.map((d, i) => `${getX(i)},${getY(d.s1 + d.s2)}`).join(' ');
   const poly2 = `${getX(0)},${height - padY} ${midPts} ${getX(safeData.length - 1)},${
     height - padY
   }`;
 
-  // Layer 1 (base: s1)
-  const lowPts = safeData.map((d, i) => `${getX(i)},${getY(d.s1)}`).join(" ");
+  const lowPts = safeData.map((d, i) => `${getX(i)},${getY(d.s1)}`).join(' ');
   const poly1 = `${getX(0)},${height - padY} ${lowPts} ${getX(safeData.length - 1)},${
     height - padY
   }`;
 
   return (
     <div className="space-y-2">
-      <svg
-        viewBox={`0 0 ${width} ${height}`}
-        className="w-full h-40 overflow-visible"
-      >
+      <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-40 overflow-visible">
         <polygon points={poly3} fill={seriesMeta[2].color} fillOpacity="0.35" />
-        <polyline
-          fill="none"
-          stroke={seriesMeta[2].color}
-          strokeWidth="2"
-          points={topPts}
-        />
+        <polyline fill="none" stroke={seriesMeta[2].color} strokeWidth="2" points={topPts} />
 
         <polygon points={poly2} fill={seriesMeta[1].color} fillOpacity="0.45" />
-        <polyline
-          fill="none"
-          stroke={seriesMeta[1].color}
-          strokeWidth="2"
-          points={midPts}
-        />
+        <polyline fill="none" stroke={seriesMeta[1].color} strokeWidth="2" points={midPts} />
 
         <polygon points={poly1} fill={seriesMeta[0].color} fillOpacity="0.6" />
-        <polyline
-          fill="none"
-          stroke={seriesMeta[0].color}
-          strokeWidth="2.5"
-          points={lowPts}
-        />
+        <polyline fill="none" stroke={seriesMeta[0].color} strokeWidth="2.5" points={lowPts} />
 
         {safeData.map((d, i) => (
           <text
@@ -366,7 +362,8 @@ export function SvgStackedAreaChart({
             x={getX(i)}
             y={height - 5}
             textAnchor="middle"
-            className="fill-slate-400 text-[9px]"
+            fill={isDark ? '#94A3B8' : '#64748B'}
+            className="text-[9px]"
           >
             {d.label.slice(0, 10)}
           </text>
@@ -380,9 +377,7 @@ export function SvgStackedAreaChart({
               style={{ backgroundColor: s.color }}
               className="w-2.5 h-2.5 rounded-full inline-block"
             />
-            <span className="text-slate-500 dark:text-slate-300">
-              {s.label}
-            </span>
+            <span style={{ color: isDark ? '#CBD5E1' : '#334155' }}>{s.label}</span>
           </span>
         ))}
       </div>
@@ -391,39 +386,53 @@ export function SvgStackedAreaChart({
 }
 
 // ============================================================================
-// 4. COLUMN CHART (Vertical Columns with Value Callouts)
+// 4. COLUMN CHART (Centered Flex Columns with Value Callouts)
 // ============================================================================
 
 export function SvgColumnChart({
   data,
-  unitSuffix = "",
+  unitSuffix = '',
 }: {
   data: ChartLabelValue[];
   unitSuffix?: string;
 }) {
-  const maxVal = Math.max(1, ...data.map((d) => d.value));
+  const { theme } = useTheme();
+  const isDark = theme === 'dark';
+  const safeData =
+    data.length > 0 ? data : [{ label: 'Current', value: 0, color: '#06B6D4' }];
+  const maxVal = Math.max(1, ...safeData.map((d) => d.value));
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-3 items-end h-44 pt-6 px-2 border-b border-slate-200 dark:border-slate-800">
-      {data.map((item, idx) => {
-        const heightPct = Math.max(10, Math.round((item.value / maxVal) * 100));
+    <div
+      style={{ borderColor: isDark ? '#1E293B' : '#E2E8F0' }}
+      className="flex items-end justify-around gap-3 h-44 pt-6 px-3 border-b"
+    >
+      {safeData.map((item, idx) => {
+        const heightPct =
+          item.value > 0 ? Math.max(14, Math.round((item.value / maxVal) * 100)) : 8;
         return (
           <div
             key={`${item.label}-${idx}`}
-            className="flex flex-col items-center justify-end h-full gap-1.5"
+            className="flex-1 flex flex-col items-center justify-end h-full gap-1.5 max-w-[72px]"
           >
-            <span className="text-[10px] font-mono font-bold text-slate-600 dark:text-slate-300">
+            <span
+              style={{ color: isDark ? '#E2E8F0' : '#0F172A' }}
+              className="text-[10px] font-mono font-bold"
+            >
               {item.value}
               {unitSuffix}
             </span>
             <div
               style={{
                 height: `${heightPct}%`,
-                backgroundColor: item.color || "#06B6D4",
+                backgroundColor: item.color || '#06B6D4',
               }}
-              className="w-full max-w-[38px] rounded-t-xl shadow-sm transition-all duration-300 hover:opacity-90"
+              className="w-full max-w-[42px] rounded-t-xl shadow-sm transition-all duration-300 hover:opacity-90"
             />
-            <span className="text-[10px] text-slate-500 truncate max-w-full pb-1.5">
+            <span
+              style={{ color: isDark ? '#94A3B8' : '#64748B' }}
+              className="text-[10px] truncate max-w-full pb-1.5"
+            >
               {item.label}
             </span>
           </div>
@@ -439,31 +448,44 @@ export function SvgColumnChart({
 
 export function SvgHorizontalBarChart({
   data,
-  unitSuffix = "",
+  unitSuffix = '',
 }: {
   data: ChartLabelValue[];
   unitSuffix?: string;
 }) {
-  const maxVal = Math.max(1, ...data.map((d) => d.value));
+  const { theme } = useTheme();
+  const isDark = theme === 'dark';
+  const safeData =
+    data.length > 0 ? data : [{ label: 'Active', value: 0, color: '#8B5CF6' }];
+  const maxVal = Math.max(1, ...safeData.map((d) => d.value));
 
   return (
     <div className="space-y-3">
-      {data.map((item, idx) => {
-        const widthPct = Math.max(6, Math.round((item.value / maxVal) * 100));
+      {safeData.map((item, idx) => {
+        const widthPct =
+          item.value > 0 ? Math.max(8, Math.round((item.value / maxVal) * 100)) : 4;
         return (
           <div key={`${item.label}-${idx}`} className="space-y-1 text-xs">
             <div className="flex items-center justify-between">
-              <span className="font-semibold truncate pr-2">{item.label}</span>
-              <span className="font-mono font-bold text-cyan-400">
+              <span
+                style={{ color: isDark ? '#E2E8F0' : '#0F172A' }}
+                className="font-semibold truncate pr-2"
+              >
+                {item.label}
+              </span>
+              <span className="font-mono font-bold text-cyan-600 dark:text-cyan-400">
                 {item.value}
                 {unitSuffix}
               </span>
             </div>
-            <div className="w-full h-2.5 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+            <div
+              style={{ backgroundColor: isDark ? '#1E293B' : '#E2E8F0' }}
+              className="w-full h-2.5 rounded-full overflow-hidden"
+            >
               <div
                 style={{
                   width: `${widthPct}%`,
-                  backgroundColor: item.color || "#8B5CF6",
+                  backgroundColor: item.color || '#8B5CF6',
                 }}
                 className="h-full rounded-full transition-all duration-300"
               />
@@ -481,46 +503,64 @@ export function SvgHorizontalBarChart({
 
 export function SvgStackedBarChart({
   rows,
-  unitPrefix = "",
+  unitPrefix = '',
 }: {
   rows: StackedSeriesPoint[];
   unitPrefix?: string;
 }) {
+  const { theme } = useTheme();
+  const isDark = theme === 'dark';
   const legendItems = rows[0]?.segments || [];
 
   return (
     <div className="space-y-3.5">
       {rows.map((row) => {
-        const rowTotal = Math.max(
-          1,
-          row.segments.reduce((acc, s) => acc + s.value, 0),
-        );
+        const rawSum = row.segments.reduce((acc, s) => acc + s.value, 0);
+        const rowTotal = Math.max(1, rawSum);
         return (
           <div key={row.label} className="space-y-1.5 text-xs">
-            <div className="flex items-center justify-between">
-              <span className="font-bold font-mono">{row.label}</span>
-              <span className="text-[11px] text-slate-400 font-mono">
+            <div className="flex items-center justify-between gap-2">
+              <span
+                style={{ color: isDark ? '#F8FAFC' : '#0F172A' }}
+                className="font-bold font-mono"
+              >
+                {row.label}
+              </span>
+              <span
+                style={{ color: isDark ? '#94A3B8' : '#64748B' }}
+                className="text-[11px] font-mono truncate"
+              >
                 {row.segments
                   .map((s) => `${s.label}: ${unitPrefix}${s.value}`)
-                  .join(" • ")}
+                  .join(' • ')}
               </span>
             </div>
-            <div className="w-full h-3.5 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden flex">
-              {row.segments.map((seg) => {
-                const pct = (seg.value / rowTotal) * 100;
-                if (pct <= 0) return null;
-                return (
-                  <div
-                    key={seg.key}
-                    style={{
-                      width: `${pct}%`,
-                      backgroundColor: seg.color,
-                    }}
-                    title={`${seg.label}: ${unitPrefix}${seg.value}`}
-                    className="h-full transition-all duration-300"
-                  />
-                );
-              })}
+            <div
+              style={{ backgroundColor: isDark ? '#1E293B' : '#E2E8F0' }}
+              className="w-full h-3.5 rounded-full overflow-hidden flex"
+            >
+              {rawSum === 0 ? (
+                <div
+                  style={{ backgroundColor: isDark ? '#334155' : '#CBD5E1' }}
+                  className="w-full h-full opacity-50"
+                />
+              ) : (
+                row.segments.map((seg) => {
+                  const pct = (seg.value / rowTotal) * 100;
+                  if (pct <= 0) return null;
+                  return (
+                    <div
+                      key={seg.key}
+                      style={{
+                        width: `${pct}%`,
+                        backgroundColor: seg.color,
+                      }}
+                      title={`${seg.label}: ${unitPrefix}${seg.value}`}
+                      className="h-full transition-all duration-300"
+                    />
+                  );
+                })
+              )}
             </div>
           </div>
         );
@@ -534,9 +574,7 @@ export function SvgStackedBarChart({
                 style={{ backgroundColor: seg.color }}
                 className="w-2.5 h-2.5 rounded-sm inline-block"
               />
-              <span className="text-slate-500 dark:text-slate-300">
-                {seg.label}
-              </span>
+              <span style={{ color: isDark ? '#CBD5E1' : '#334155' }}>{seg.label}</span>
             </span>
           ))}
         </div>
@@ -546,15 +584,10 @@ export function SvgStackedBarChart({
 }
 
 // ============================================================================
-// 7. PIE CHART (Full-Sector SVG Trigonometric Arc Pie)
+// 7. PIE CHART (Full-Sector SVG Trigonometric Arc Pie with Zero-State Ring)
 // ============================================================================
 
-function polarToCartesian(
-  cx: number,
-  cy: number,
-  r: number,
-  angleInDegrees: number,
-) {
+function polarToCartesian(cx: number, cy: number, r: number, angleInDegrees: number) {
   const rad = ((angleInDegrees - 90) * Math.PI) / 180.0;
   return {
     x: cx + r * Math.cos(rad),
@@ -567,21 +600,20 @@ function describePieSlice(
   cy: number,
   r: number,
   startAngle: number,
-  endAngle: number,
+  endAngle: number
 ) {
-  const clampedEnd =
-    endAngle - startAngle >= 360 ? startAngle + 359.99 : endAngle;
+  const clampedEnd = endAngle - startAngle >= 360 ? startAngle + 359.99 : endAngle;
   const start = polarToCartesian(cx, cy, r, clampedEnd);
   const end = polarToCartesian(cx, cy, r, startAngle);
-  const largeArcFlag = clampedEnd - startAngle <= 180 ? "0" : "1";
+  const largeArcFlag = clampedEnd - startAngle <= 180 ? '0' : '1';
   return [
-    "M",
+    'M',
     cx,
     cy,
-    "L",
+    'L',
     start.x,
     start.y,
-    "A",
+    'A',
     r,
     r,
     0,
@@ -589,62 +621,88 @@ function describePieSlice(
     0,
     end.x,
     end.y,
-    "Z",
-  ].join(" ");
+    'Z',
+  ].join(' ');
 }
 
 export function SvgPieChart({ data }: { data: ChartLabelValue[] }) {
-  const total = Math.max(
-    1,
-    data.reduce((acc, d) => acc + d.value, 0),
-  );
+  const { theme } = useTheme();
+  const isDark = theme === 'dark';
+
+  const rawTotal = data.reduce((acc, d) => acc + d.value, 0);
+  const total = Math.max(1, rawTotal);
   let cumulativeAngle = 0;
 
   return (
     <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
       <svg viewBox="0 0 160 160" className="w-36 h-36 shrink-0">
-        {data.map((slice, idx) => {
-          const val = slice.value > 0 ? slice.value : 0;
-          const angle = (val / total) * 360;
-          if (angle <= 0) return null;
-          const path = describePieSlice(
-            80,
-            80,
-            70,
-            cumulativeAngle,
-            cumulativeAngle + angle,
-          );
-          cumulativeAngle += angle;
-          return (
-            <path
-              key={`${slice.label}-${idx}`}
-              d={path}
-              fill={slice.color || "#06B6D4"}
-              className="stroke-white dark:stroke-[#111827]"
+        {rawTotal <= 0 ? (
+          <>
+            <circle
+              cx="80"
+              cy="80"
+              r="68"
+              fill={isDark ? '#1E293B' : '#F1F5F9'}
+              stroke={isDark ? '#334155' : '#CBD5E1'}
               strokeWidth="2"
             />
-          );
-        })}
+            <text
+              x="80"
+              y="83"
+              textAnchor="middle"
+              fill={isDark ? '#94A3B8' : '#64748B'}
+              className="text-[10px] font-bold"
+            >
+              No Records Yet
+            </text>
+          </>
+        ) : (
+          data.map((slice, idx) => {
+            const val = slice.value > 0 ? slice.value : 0;
+            const angle = (val / total) * 360;
+            if (angle <= 0) return null;
+            const path = describePieSlice(
+              80,
+              80,
+              70,
+              cumulativeAngle,
+              cumulativeAngle + angle
+            );
+            cumulativeAngle += angle;
+            return (
+              <path
+                key={`${slice.label}-${idx}`}
+                d={path}
+                fill={slice.color || '#06B6D4'}
+                stroke={isDark ? '#111827' : '#FFFFFF'}
+                strokeWidth="2"
+              />
+            );
+          })
+        )}
       </svg>
 
       <div className="flex-1 space-y-2 w-full text-xs">
         {data.map((slice) => {
-          const pct = Math.round((slice.value / total) * 100);
+          const pct = rawTotal > 0 ? Math.round((slice.value / total) * 100) : 0;
           return (
-            <div
-              key={slice.label}
-              className="flex items-center justify-between"
-            >
+            <div key={slice.label} className="flex items-center justify-between">
               <span className="flex items-center gap-2">
                 <span
-                  style={{ backgroundColor: slice.color || "#06B6D4" }}
+                  style={{ backgroundColor: slice.color || '#06B6D4' }}
                   className="w-2.5 h-2.5 rounded-full inline-block shrink-0"
                 />
-                <span className="text-slate-600 dark:text-slate-300 truncate">
+                <span
+                  style={{ color: isDark ? '#CBD5E1' : '#334155' }}
+                  className="truncate"
+                >
                   {slice.label}
                 </span>
               </span>
-              <span className="font-mono font-bold">
+              <span
+                style={{ color: isDark ? '#F8FAFC' : '#0F172A' }}
+                className="font-mono font-bold"
+              >
                 {slice.value} ({pct}%)
               </span>
             </div>
@@ -668,10 +726,11 @@ export function SvgDonutChart({
   centerTitle: string;
   centerValue: string;
 }) {
-  const total = Math.max(
-    1,
-    data.reduce((acc, d) => acc + d.value, 0),
-  );
+  const { theme } = useTheme();
+  const isDark = theme === 'dark';
+
+  const rawTotal = data.reduce((acc, d) => acc + d.value, 0);
+  const total = Math.max(1, rawTotal);
   const radius = 56;
   const circumference = 2 * Math.PI * radius;
   let accumulatedFraction = 0;
@@ -685,8 +744,7 @@ export function SvgDonutChart({
             cy="70"
             r={radius}
             fill="transparent"
-            stroke="currentColor"
-            className="text-slate-200 dark:text-slate-800"
+            stroke={isDark ? '#1E293B' : '#E2E8F0'}
             strokeWidth="16"
           />
           {data.map((seg, idx) => {
@@ -702,7 +760,7 @@ export function SvgDonutChart({
                 cy="70"
                 r={radius}
                 fill="transparent"
-                stroke={seg.color || "#10B981"}
+                stroke={seg.color || '#10B981'}
                 strokeWidth="16"
                 strokeDasharray={`${dash} ${circumference}`}
                 strokeDashoffset={offset}
@@ -711,10 +769,16 @@ export function SvgDonutChart({
           })}
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-2">
-          <span className="text-[10px] uppercase tracking-wider text-slate-400">
+          <span
+            style={{ color: isDark ? '#94A3B8' : '#64748B' }}
+            className="text-[10px] uppercase tracking-wider"
+          >
             {centerTitle}
           </span>
-          <span className="text-xs font-extrabold font-mono mt-0.5">
+          <span
+            style={{ color: isDark ? '#F8FAFC' : '#0F172A' }}
+            className="text-xs font-extrabold font-mono mt-0.5"
+          >
             {centerValue}
           </span>
         </div>
@@ -725,15 +789,21 @@ export function SvgDonutChart({
           <div key={seg.label} className="flex items-center justify-between">
             <span className="flex items-center gap-2">
               <span
-                style={{ backgroundColor: seg.color || "#10B981" }}
+                style={{ backgroundColor: seg.color || '#10B981' }}
                 className="w-2.5 h-2.5 rounded-full inline-block shrink-0"
               />
-              <span className="text-slate-600 dark:text-slate-300 truncate">
+              <span
+                style={{ color: isDark ? '#CBD5E1' : '#334155' }}
+                className="truncate"
+              >
                 {seg.label}
               </span>
             </span>
-            <span className="font-mono font-bold">
-              {seg.value.toLocaleString("en-IN")}
+            <span
+              style={{ color: isDark ? '#F8FAFC' : '#0F172A' }}
+              className="font-mono font-bold"
+            >
+              {seg.value.toLocaleString('en-IN')}
             </span>
           </div>
         ))}
@@ -748,11 +818,14 @@ export function SvgDonutChart({
 
 export function SvgHeatmapGrid({
   cells,
-  accentRgb = "16, 185, 129",
+  accentRgb = '16, 185, 129',
 }: {
   cells: HeatmapCellPoint[];
   accentRgb?: string;
 }) {
+  const { theme } = useTheme();
+  const isDark = theme === 'dark';
+
   const rowLabels = Array.from(new Set(cells.map((c) => c.rowLabel)));
   const colLabels = Array.from(new Set(cells.map((c) => c.colLabel)));
   const maxVal = Math.max(1, ...cells.map((c) => c.value));
@@ -762,11 +835,18 @@ export function SvgHeatmapGrid({
       <table className="w-full text-center text-[11px] border-separate border-spacing-1.5">
         <thead>
           <tr>
-            <th className="text-left text-slate-400 font-semibold px-1">
+            <th
+              style={{ color: isDark ? '#94A3B8' : '#64748B' }}
+              className="text-left font-semibold px-1"
+            >
               Matrix
             </th>
             {colLabels.map((col) => (
-              <th key={col} className="text-slate-400 font-mono px-1.5 py-1">
+              <th
+                key={col}
+                style={{ color: isDark ? '#94A3B8' : '#64748B' }}
+                className="font-mono px-1.5 py-1"
+              >
                 {col}
               </th>
             ))}
@@ -775,20 +855,24 @@ export function SvgHeatmapGrid({
         <tbody>
           {rowLabels.map((row) => (
             <tr key={row}>
-              <td className="text-left font-mono font-bold text-slate-500 dark:text-slate-300 pr-2">
+              <td
+                style={{ color: isDark ? '#CBD5E1' : '#334155' }}
+                className="text-left font-mono font-bold pr-2"
+              >
                 {row}
               </td>
               {colLabels.map((col) => {
                 const match = cells.find(
-                  (c) => c.rowLabel === row && c.colLabel === col,
+                  (c) => c.rowLabel === row && c.colLabel === col
                 );
                 const val = match?.value ?? 0;
-                const alpha = val === 0 ? 0.08 : 0.22 + (val / maxVal) * 0.75;
+                const alpha = val === 0 ? 0.12 : 0.25 + (val / maxVal) * 0.7;
                 return (
                   <td
                     key={`${row}-${col}`}
                     style={{
                       backgroundColor: `rgba(${accentRgb}, ${alpha.toFixed(2)})`,
+                      color: isDark ? '#F8FAFC' : '#0F172A',
                     }}
                     className="rounded-lg py-2 px-2 font-mono font-bold"
                     title={`${row} × ${col}: ${val}`}
@@ -815,21 +899,20 @@ function describeAnnularSector(
   innerR: number,
   outerR: number,
   startAngle: number,
-  endAngle: number,
+  endAngle: number
 ) {
-  const clampedEnd =
-    endAngle - startAngle >= 360 ? startAngle + 359.99 : endAngle;
+  const clampedEnd = endAngle - startAngle >= 360 ? startAngle + 359.99 : endAngle;
   const p1 = polarToCartesian(cx, cy, outerR, clampedEnd);
   const p2 = polarToCartesian(cx, cy, outerR, startAngle);
   const p3 = polarToCartesian(cx, cy, innerR, startAngle);
   const p4 = polarToCartesian(cx, cy, innerR, clampedEnd);
-  const largeArc = clampedEnd - startAngle <= 180 ? "0" : "1";
+  const largeArc = clampedEnd - startAngle <= 180 ? '0' : '1';
 
   return [
-    "M",
+    'M',
     p1.x,
     p1.y,
-    "A",
+    'A',
     outerR,
     outerR,
     0,
@@ -837,10 +920,10 @@ function describeAnnularSector(
     0,
     p2.x,
     p2.y,
-    "L",
+    'L',
     p3.x,
     p3.y,
-    "A",
+    'A',
     innerR,
     innerR,
     0,
@@ -848,8 +931,8 @@ function describeAnnularSector(
     1,
     p4.x,
     p4.y,
-    "Z",
-  ].join(" ");
+    'Z',
+  ].join(' ');
 }
 
 export function SvgSunburstChart({
@@ -862,9 +945,12 @@ export function SvgSunburstChart({
     children?: Array<{ label: string; value: number; color: string }>;
   }>;
 }) {
+  const { theme } = useTheme();
+  const isDark = theme === 'dark';
+
   const total = Math.max(
     1,
-    nodes.reduce((acc, n) => acc + Math.max(1, n.value), 0),
+    nodes.reduce((acc, n) => acc + Math.max(1, n.value), 0)
   );
   let innerCursor = 0;
 
@@ -882,7 +968,7 @@ export function SvgSunburstChart({
           const children = node.children || [];
           const childTotal = Math.max(
             1,
-            children.reduce((a, b) => a + Math.max(1, b.value), 0),
+            children.reduce((a, b) => a + Math.max(1, b.value), 0)
           );
           let childCursor = start;
 
@@ -891,7 +977,7 @@ export function SvgSunburstChart({
               <path
                 d={innerPath}
                 fill={node.color}
-                className="stroke-white dark:stroke-[#111827]"
+                stroke={isDark ? '#111827' : '#FFFFFF'}
                 strokeWidth="1.5"
               >
                 <title>{`${node.label}: ${node.value}`}</title>
@@ -901,21 +987,14 @@ export function SvgSunburstChart({
                 const cStart = childCursor;
                 const cEnd = childCursor + cSpan;
                 childCursor = cEnd;
-                const outerPath = describeAnnularSector(
-                  90,
-                  90,
-                  55,
-                  82,
-                  cStart,
-                  cEnd,
-                );
+                const outerPath = describeAnnularSector(90, 90, 55, 82, cStart, cEnd);
                 return (
                   <path
                     key={`${ch.label}-${cIdx}`}
                     d={outerPath}
                     fill={ch.color || node.color}
                     fillOpacity={0.78}
-                    className="stroke-white dark:stroke-[#111827]"
+                    stroke={isDark ? '#111827' : '#FFFFFF'}
                     strokeWidth="1.5"
                   >
                     <title>{`${node.label} → ${ch.label}: ${ch.value}`}</title>
@@ -929,13 +1008,14 @@ export function SvgSunburstChart({
           cx="90"
           cy="90"
           r="20"
-          className="fill-white dark:fill-[#111827]"
+          fill={isDark ? '#111827' : '#FFFFFF'}
         />
         <text
           x="90"
           y="93"
           textAnchor="middle"
-          className="fill-slate-500 text-[8px] font-bold uppercase"
+          fill={isDark ? '#94A3B8' : '#64748B'}
+          className="text-[8px] font-bold uppercase"
         >
           SUNBURST
         </text>
@@ -944,7 +1024,10 @@ export function SvgSunburstChart({
       <div className="flex-1 space-y-2 w-full text-xs">
         {nodes.map((n) => (
           <div key={n.label} className="space-y-1">
-            <div className="flex items-center justify-between font-bold">
+            <div
+              style={{ color: isDark ? '#F8FAFC' : '#0F172A' }}
+              className="flex items-center justify-between font-bold"
+            >
               <span className="flex items-center gap-2">
                 <span
                   style={{ backgroundColor: n.color }}
@@ -952,16 +1035,16 @@ export function SvgSunburstChart({
                 />
                 <span>{n.label}</span>
               </span>
-              <span className="font-mono">
-                {n.value.toLocaleString("en-IN")}
-              </span>
+              <span className="font-mono">{n.value.toLocaleString('en-IN')}</span>
             </div>
             {n.children && (
-              <div className="pl-4 flex flex-wrap gap-2 text-[11px] text-slate-400">
+              <div
+                style={{ color: isDark ? '#94A3B8' : '#64748B' }}
+                className="pl-4 flex flex-wrap gap-2 text-[11px]"
+              >
                 {n.children.map((ch) => (
                   <span key={ch.label}>
-                    • {ch.label}:{" "}
-                    <strong className="font-mono">{ch.value}</strong>
+                    • {ch.label}: <strong className="font-mono">{ch.value}</strong>
                   </span>
                 ))}
               </div>
@@ -979,20 +1062,23 @@ export function SvgSunburstChart({
 
 export function SvgRadarChart({
   axes,
-  strokeColor = "#06B6D4",
+  strokeColor = '#06B6D4',
 }: {
   axes: ChartLabelValue[];
   strokeColor?: string;
 }) {
+  const { theme } = useTheme();
+  const isDark = theme === 'dark';
+
   const safeAxes =
     axes.length >= 3
       ? axes
       : [
-          { label: "Attendance", value: 90 },
-          { label: "Progress", value: 85 },
-          { label: "Assessments", value: 92 },
-          { label: "Fees", value: 100 },
-          { label: "Engagement", value: 88 },
+          { label: 'Attendance', value: 90 },
+          { label: 'Progress', value: 85 },
+          { label: 'Assessments', value: 92 },
+          { label: 'Fees', value: 100 },
+          { label: 'Engagement', value: 88 },
         ];
 
   const cx = 100;
@@ -1014,7 +1100,7 @@ export function SvgRadarChart({
       const pt = getPoint(idx, ratio);
       return `${pt.x},${pt.y}`;
     })
-    .join(" ");
+    .join(' ');
 
   return (
     <div className="flex items-center justify-center">
@@ -1025,14 +1111,13 @@ export function SvgRadarChart({
               const p = getPoint(idx, ring);
               return `${p.x},${p.y}`;
             })
-            .join(" ");
+            .join(' ');
           return (
             <polygon
               key={ring}
               points={ringPts}
               fill="none"
-              stroke="currentColor"
-              className="text-slate-200 dark:text-slate-800"
+              stroke={isDark ? '#1E293B' : '#E2E8F0'}
               strokeWidth="1"
             />
           );
@@ -1048,14 +1133,14 @@ export function SvgRadarChart({
                 y1={cy}
                 x2={end.x}
                 y2={end.y}
-                stroke="currentColor"
-                className="text-slate-200 dark:text-slate-800"
+                stroke={isDark ? '#1E293B' : '#E2E8F0'}
               />
               <text
                 x={labelPt.x}
                 y={labelPt.y}
                 textAnchor="middle"
-                className="fill-slate-500 dark:fill-slate-300 text-[8px] font-semibold"
+                fill={isDark ? '#CBD5E1' : '#334155'}
+                className="text-[8px] font-semibold"
               >
                 {ax.label} ({ax.value}%)
               </text>

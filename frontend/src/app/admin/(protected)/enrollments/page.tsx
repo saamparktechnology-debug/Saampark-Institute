@@ -1,5 +1,5 @@
-import { AdminCoursesView } from '@/features/courses';
+import { AdminEnrollmentsManagementView } from '@/features/courses';
 
 export default function AdminEnrollmentsPage() {
-  return <AdminCoursesView />;
+  return <AdminEnrollmentsManagementView />;
 }

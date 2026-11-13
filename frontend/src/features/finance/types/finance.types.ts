@@ -1,3 +1,21 @@
+export interface GstTaxInvoiceBreakdown {
+  sacCode: string;
+  instituteGstin: string;
+  instituteState: string;
+  placeOfSupplyState: string;
+  customerGstin: string | null;
+  isIntraState: boolean;
+  taxableValueInr: string;
+  cgstRatePercent: number;
+  cgstAmountInr: string;
+  sgstRatePercent: number;
+  sgstAmountInr: string;
+  igstRatePercent: number;
+  igstAmountInr: string;
+  totalGstAmountInr: string;
+  totalInvoiceAmountInr: string;
+}
+
 export interface PaymentTransactionItem {
   id: string;
   enrollmentId: string;
@@ -19,9 +37,30 @@ export interface PaymentTransactionItem {
   receiptNumber: string | null;
   verifiedAt: string | null;
   createdAt: string;
+  gstInvoice?: GstTaxInvoiceBreakdown;
+  creditNoteNumber?: string | null;
+  creditNoteIssuedAt?: string | null;
+  refundReason?: string | null;
 }
 
-export interface WalletLedgerEntryItem {
+export interface CreateRazorpayOrderResponse {
+  paidViaWallet: boolean;
+  providerOrderId: string | null;
+  razorpayKeyId: string;
+  isLiveRazorpayOrder: boolean;
+  amountInPaise: number;
+  amountInr: string;
+  currency: string;
+  enrollmentId: string;
+  installmentSequenceNumber: number;
+  courseTitle: string;
+  courseCode: string;
+  studentName: string;
+  studentEmail: string;
+  studentPhone: string;
+}
+
+export interface WalletTransactionItem {
   id: string;
   transactionType:
     | 'REFERRAL_REWARD'
@@ -58,18 +97,18 @@ export interface RedemptionRequestItem {
   paidAt: string | null;
 }
 
-export interface MyWalletDetail {
+export interface MyWalletAndLedgerData {
   id: string;
   userId: string;
   currency: string;
   availableBalance: string;
   reservedBalance: string;
   reconciledLedgerBalance: string;
-  transactions: WalletLedgerEntryItem[];
+  transactions: WalletTransactionItem[];
   redemptionRequests: RedemptionRequestItem[];
 }
 
-export interface AdminWalletDirectoryItem {
+export interface AdminWalletSummaryItem {
   id: string;
   userId: string;
   userFullName: string;
@@ -83,7 +122,7 @@ export interface AdminWalletDirectoryItem {
   updatedAt: string;
 }
 
-export interface ReferralListResponse {
+export interface ReferralSummaryData {
   myReferralCode: string | null;
   items: Array<{
     id: string;
@@ -100,7 +139,7 @@ export interface ReferralListResponse {
   }>;
 }
 
-export interface TeacherPayoutStatementItem {
+export interface TeacherPayoutItem {
   id: string;
   teacherId: string;
   teacherName: string;
@@ -111,6 +150,9 @@ export interface TeacherPayoutStatementItem {
   grossCourseCollections: string;
   revenueSharePercentSnapshot: string;
   grossPayoutAmount: string;
+  tdsSection?: '194J';
+  tdsPercent?: string;
+  tdsAmount?: string;
   adjustments: string;
   netPayoutAmount: string;
   currency: string;

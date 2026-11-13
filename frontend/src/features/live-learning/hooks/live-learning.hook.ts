@@ -105,6 +105,31 @@ export function useUpdateRecordingStatusMutation() {
   });
 }
 
+export function useSaveWatchProgressMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      recordingId,
+      lastPositionSeconds,
+      watchedSeconds,
+      completed,
+    }: {
+      recordingId: string;
+      lastPositionSeconds: number;
+      watchedSeconds: number;
+      completed?: boolean;
+    }) =>
+      liveLearningService.saveWatchProgress(recordingId, {
+        lastPositionSeconds,
+        watchedSeconds,
+        completed,
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.liveLearning.all });
+    },
+  });
+}
+
 export function useAttendanceSessionsQuery(filters?: Record<string, string | number>) {
   return useQuery({
     queryKey: queryKeys.liveLearning.attendanceSessions(filters),
@@ -174,6 +199,18 @@ export function useUpdateAttendanceSessionStatusMutation() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.liveLearning.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.dashboards.all });
+    },
+  });
+}
+
+export function useDispatchLowAttendanceAlertsMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload?: { courseId?: string }) =>
+      liveLearningService.dispatchLowAttendanceAlerts(payload),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.liveLearning.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.operations.notifications() });
     },
   });
 }

@@ -1,35 +1,30 @@
-import { z } from "zod";
-import { Request, Response, Router } from "express";
-import { Prisma } from "@prisma/client";
-import { prisma } from "../../config/prisma";
-import { env } from "../../config/env";
-import { AuthenticatedActor } from "../../types/express";
-import { ApiError } from "../../utils/ApiError";
-import { apiResponse } from "../../utils/apiResponse";
-import { catchAsync } from "../../utils/catchAsync";
-import {
-  buildPaginationMeta,
-  parsePaginationAndFilters,
-} from "../../utils/pagination";
-import {
-  authenticate,
-  authorizeRoles,
-} from "../../middlewares/auth.middleware";
-import { validateRequest } from "../../middlewares/validate.middleware";
+import { z } from 'zod';
+import { Request, Response, Router } from 'express';
+import { Prisma } from '@prisma/client';
+import { prisma } from '../../config/prisma';
+import { env } from '../../config/env';
+import { AuthenticatedActor } from '../../types/express';
+import { ApiError } from '../../utils/ApiError';
+import { apiResponse } from '../../utils/apiResponse';
+import { catchAsync } from '../../utils/catchAsync';
+import { buildPaginationMeta, parsePaginationAndFilters } from '../../utils/pagination';
+import { authenticate, authorizeRoles } from '../../middlewares/auth.middleware';
+import { OmnichannelMessagingService } from '../../integrations/messaging.adapter';
+import { validateRequest } from '../../middlewares/validate.middleware';
 
 // ----------------------------------------------------------------------------
 // CSV FORMULA-INJECTION SANITIZATION & SERIALIZATION HELPERS
 // ----------------------------------------------------------------------------
 
-const DANGEROUS_CSV_PREFIXES = ["=", "+", "-", "@", "\t", "\r"];
+const DANGEROUS_CSV_PREFIXES = ['=', '+', '-', '@', '\t', '\r'];
 
 export function sanitizeCsvCell(value: unknown): string {
-  if (value === null || value === undefined) return "";
+  if (value === null || value === undefined) return '';
   let str = String(value);
   if (str.length > 0 && DANGEROUS_CSV_PREFIXES.includes(str[0])) {
     str = `'${str}`;
   }
-  if (str.includes('"') || str.includes(",") || str.includes("\n")) {
+  if (str.includes('"') || str.includes(',') || str.includes('\n')) {
     return `"${str.replace(/"/g, '""')}"`;
   }
   return str;
@@ -37,13 +32,13 @@ export function sanitizeCsvCell(value: unknown): string {
 
 export function buildCsvDocument(
   headers: string[],
-  rows: Array<Record<string, unknown>>,
+  rows: Array<Record<string, unknown>>
 ): string {
-  const headerLine = headers.map((h) => sanitizeCsvCell(h)).join(",");
+  const headerLine = headers.map((h) => sanitizeCsvCell(h)).join(',');
   const dataLines = rows.map((row) =>
-    headers.map((h) => sanitizeCsvCell(row[h])).join(","),
+    headers.map((h) => sanitizeCsvCell(row[h])).join(',')
   );
-  return [headerLine, ...dataLines].join("\n");
+  return [headerLine, ...dataLines].join('\n');
 }
 
 // ----------------------------------------------------------------------------
@@ -65,13 +60,10 @@ export interface PlatformSettingsDto {
   updatedBy: string;
 }
 
-const DEFAULT_PLATFORM_SETTINGS: Omit<
-  PlatformSettingsDto,
-  "updatedAt" | "updatedBy"
-> = {
-  instituteName: "Gemini Argon Institute of Technology & Sciences",
-  defaultCurrency: "INR",
-  defaultTimezone: env.DEFAULT_TIMEZONE || "Asia/Kolkata",
+const DEFAULT_PLATFORM_SETTINGS: Omit<PlatformSettingsDto, 'updatedAt' | 'updatedBy'> = {
+  instituteName: 'Gemini Argon Institute of Technology & Sciences',
+  defaultCurrency: 'INR',
+  defaultTimezone: env.DEFAULT_TIMEZONE || 'Asia/Kolkata',
   defaultReferralRewardInr: 500,
   minUpiRedemptionInr: 100,
   defaultInstallmentGraceDays: 5,
@@ -84,17 +76,17 @@ const DEFAULT_PLATFORM_SETTINGS: Omit<
 export const exportReportQueryValidation = {
   query: z.object({
     dataset: z
-      .enum(["payments", "enrollments", "payouts", "attendance", "audit_logs"])
-      .default("payments"),
-    format: z.enum(["csv", "json"]).default("csv"),
+      .enum(['payments', 'enrollments', 'payouts', 'attendance', 'audit_logs'])
+      .default('payments'),
+    format: z.enum(['csv', 'json']).default('csv'),
   }),
 };
 
 export const updatePlatformSettingsValidation = {
   body: z.object({
     instituteName: z.string().trim().min(3).max(150),
-    defaultCurrency: z.string().trim().length(3).default("INR"),
-    defaultTimezone: z.string().trim().min(3).max(64).default("Asia/Kolkata"),
+    defaultCurrency: z.string().trim().length(3).default('INR'),
+    defaultTimezone: z.string().trim().min(3).max(64).default('Asia/Kolkata'),
     defaultReferralRewardInr: z.number().min(0).max(50000),
     minUpiRedemptionInr: z.number().min(10).max(100000),
     defaultInstallmentGraceDays: z.number().int().min(0).max(30),
@@ -114,10 +106,8 @@ export class SystemAdministrationService {
    * Computes executive financial, academic, and operational summary metrics from MySQL (`/admin/reports`).
    */
   static async getExecutiveReports(actor: AuthenticatedActor) {
-    if (actor.role !== "ADMIN") {
-      throw ApiError.forbidden(
-        "Only Administrators can access platform-wide executive reports.",
-      );
+    if (actor.role !== 'ADMIN') {
+      throw ApiError.forbidden('Only Administrators can access platform-wide executive reports.');
     }
 
     const [
@@ -134,12 +124,12 @@ export class SystemAdministrationService {
       coursesWithStats,
     ] = await Promise.all([
       prisma.paymentTransaction.aggregate({
-        where: { status: "CAPTURED" },
+        where: { status: 'CAPTURED' },
         _sum: { amount: true },
         _count: { id: true },
       }),
       prisma.paymentTransaction.aggregate({
-        where: { status: "REFUNDED" },
+        where: { status: 'REFUNDED' },
         _sum: { amount: true },
         _count: { id: true },
       }),
@@ -147,17 +137,17 @@ export class SystemAdministrationService {
         _sum: { availableBalance: true, reservedBalance: true },
       }),
       prisma.teacherPayout.aggregate({
-        where: { status: { in: ["APPROVED", "PAID"] } },
+        where: { status: { in: ['APPROVED', 'PAID'] } },
         _sum: { netPayoutAmount: true },
       }),
       prisma.installment.aggregate({
-        where: { status: { in: ["PENDING", "OVERDUE"] } },
+        where: { status: { in: ['PENDING', 'OVERDUE'] } },
         _sum: { amount: true },
         _count: { id: true },
       }),
-      prisma.enrollment.count({ where: { status: "ACTIVE" } }),
-      prisma.enrollment.count({ where: { status: "COMPLETED" } }),
-      prisma.certificate.count({ where: { status: "ISSUED" } }),
+      prisma.enrollment.count({ where: { status: 'ACTIVE' } }),
+      prisma.enrollment.count({ where: { status: 'COMPLETED' } }),
+      prisma.certificate.count({ where: { status: 'ISSUED' } }),
       prisma.attendanceRecord.findMany({ select: { status: true } }),
       prisma.supportTicket.findMany({ select: { status: true } }),
       prisma.course.findMany({
@@ -172,19 +162,18 @@ export class SystemAdministrationService {
           enrollments: {
             include: {
               paymentTransactions: {
-                where: { status: "CAPTURED" },
+                where: { status: 'CAPTURED' },
                 select: { amount: true },
               },
             },
           },
         },
-        orderBy: { createdAt: "desc" },
+        orderBy: { createdAt: 'desc' },
       }),
     ]);
 
     const presentAtt = attendanceRecords.filter(
-      (r) =>
-        r.status === "PRESENT" || r.status === "LATE" || r.status === "EXCUSED",
+      (r) => r.status === 'PRESENT' || r.status === 'LATE' || r.status === 'EXCUSED'
     ).length;
     const overallAttendancePercent =
       attendanceRecords.length > 0
@@ -192,7 +181,7 @@ export class SystemAdministrationService {
         : 0;
 
     const resolvedTickets = supportTickets.filter(
-      (t) => t.status === "RESOLVED" || t.status === "CLOSED",
+      (t) => t.status === 'RESOLVED' || t.status === 'CLOSED'
     ).length;
     const ticketResolutionPercent =
       supportTickets.length > 0
@@ -234,7 +223,7 @@ export class SystemAdministrationService {
         const courseRevenue = c.enrollments.reduce((acc, enr) => {
           const sum = enr.paymentTransactions.reduce(
             (s, tx) => s + Number(tx.amount),
-            0,
+            0
           );
           return acc + sum;
         }, 0);
@@ -259,76 +248,67 @@ export class SystemAdministrationService {
    */
   static async exportDataset(
     actor: AuthenticatedActor,
-    dataset:
-      | "payments"
-      | "enrollments"
-      | "payouts"
-      | "attendance"
-      | "audit_logs",
-    format: "csv" | "json",
+    dataset: 'payments' | 'enrollments' | 'payouts' | 'attendance' | 'audit_logs',
+    format: 'csv' | 'json'
   ) {
-    if (actor.role !== "ADMIN") {
-      throw ApiError.forbidden(
-        "Only Administrators can export platform datasets.",
-      );
+    if (actor.role !== 'ADMIN') {
+      throw ApiError.forbidden('Only Administrators can export platform datasets.');
     }
 
     let headers: string[] = [];
     let rows: Array<Record<string, unknown>> = [];
 
-    if (dataset === "payments") {
+    if (dataset === 'payments') {
       const data = await prisma.paymentTransaction.findMany({
         include: {
           student: { select: { fullName: true, email: true } },
-          enrollment: {
-            include: { course: { select: { code: true, title: true } } },
-          },
+          enrollment: { include: { course: { select: { code: true, title: true } } } },
         },
-        orderBy: { createdAt: "desc" },
+        orderBy: { createdAt: 'desc' },
         take: 500,
       });
       headers = [
-        "transactionId",
-        "receiptNumber",
-        "studentName",
-        "studentEmail",
-        "courseCode",
-        "provider",
-        "amountInr",
-        "status",
-        "verifiedAt",
+        'transactionId',
+        'receiptNumber',
+        'studentName',
+        'studentEmail',
+        'courseCode',
+        'provider',
+        'amountInr',
+        'status',
+        'verifiedAt',
       ];
       rows = data.map((tx) => ({
         transactionId: tx.id,
-        receiptNumber: tx.receiptNumber || tx.providerPaymentId || "",
+        receiptNumber: tx.receiptNumber || tx.providerPaymentId || '',
         studentName: tx.student.fullName,
         studentEmail: tx.student.email,
         courseCode: tx.enrollment.course.code,
         provider: tx.provider,
         amountInr: tx.amount.toFixed(2),
         status: tx.status,
-        verifiedAt: tx.verifiedAt ? tx.verifiedAt.toISOString() : "",
+        verifiedAt: tx.verifiedAt ? tx.verifiedAt.toISOString() : '',
       }));
-    } else if (dataset === "enrollments") {
+    } else if (dataset === 'enrollments') {
       const data = await prisma.enrollment.findMany({
         include: {
           student: { select: { fullName: true, email: true } },
           course: { select: { code: true, title: true } },
         },
-        orderBy: { enrolledAt: "desc" },
+        orderBy: { enrolledAt: 'desc' },
         take: 500,
       });
       headers = [
-        "enrollmentId",
-        "studentName",
-        "studentEmail",
-        "courseCode",
-        "courseTitle",
-        "planType",
-        "purchasedPriceInr",
-        "status",
-        "progressPercent",
-        "enrolledAt",
+        'enrollmentId',
+        'studentName',
+        'studentEmail',
+        'courseCode',
+        'courseTitle',
+        'planType',
+        'purchasedPriceInr',
+        'status',
+        'progressPercent',
+        'enrolledAt',
       ];
       rows = data.map((e) => ({
         enrollmentId: e.id,
@@ -342,24 +322,24 @@ export class SystemAdministrationService {
         progressPercent: e.progressPercent.toFixed(2),
         enrolledAt: e.enrolledAt.toISOString(),
       }));
-    } else if (dataset === "payouts") {
+    } else if (dataset === 'payouts') {
       const data = await prisma.teacherPayout.findMany({
         include: {
           teacher: { select: { fullName: true, email: true } },
         },
-        orderBy: { createdAt: "desc" },
+        orderBy: { createdAt: 'desc' },
         take: 500,
       });
       headers = [
-        "payoutId",
-        "teacherName",
-        "teacherEmail",
-        "periodStart",
-        "periodEnd",
-        "grossCollectionsInr",
-        "sharePercent",
-        "netPayoutInr",
-        "status",
+        'payoutId',
+        'teacherName',
+        'teacherEmail',
+        'periodStart',
+        'periodEnd',
+        'grossCollectionsInr',
+        'sharePercent',
+        'netPayoutInr',
+        'status',
       ];
       rows = data.map((p) => ({
         payoutId: p.id,
@@ -372,7 +352,7 @@ export class SystemAdministrationService {
         netPayoutInr: p.netPayoutAmount.toFixed(2),
         status: p.status,
       }));
-    } else if (dataset === "attendance") {
+    } else if (dataset === 'attendance') {
       const data = await prisma.attendanceRecord.findMany({
         include: {
           student: { select: { fullName: true, email: true } },
@@ -380,19 +360,19 @@ export class SystemAdministrationService {
             include: { course: { select: { code: true, title: true } } },
           },
         },
-        orderBy: { markedAt: "desc" },
+        orderBy: { markedAt: 'desc' },
         take: 500,
       });
       headers = [
-        "recordId",
-        "courseCode",
-        "sessionDate",
-        "studentName",
-        "studentEmail",
-        "status",
-        "source",
-        "correctionReason",
-        "markedAt",
+        'recordId',
+        'courseCode',
+        'sessionDate',
+        'studentName',
+        'studentEmail',
+        'status',
+        'source',
+        'correctionReason',
+        'markedAt',
       ];
       rows = data.map((r) => ({
         recordId: r.id,
@@ -402,35 +382,33 @@ export class SystemAdministrationService {
         studentEmail: r.student.email,
         status: r.status,
         source: r.source,
-        correctionReason: r.correctionReason || "",
+        correctionReason: r.correctionReason || '',
         markedAt: r.markedAt.toISOString(),
       }));
     } else {
       const data = await prisma.auditLog.findMany({
-        include: {
-          actor: { select: { fullName: true, email: true, role: true } },
-        },
-        orderBy: { createdAt: "desc" },
+        include: { actor: { select: { fullName: true, email: true, role: true } } },
+        orderBy: { createdAt: 'desc' },
         take: 500,
       });
       headers = [
-        "auditId",
-        "action",
-        "entityType",
-        "entityId",
-        "actorName",
-        "actorRole",
-        "reason",
-        "createdAt",
+        'auditId',
+        'action',
+        'entityType',
+        'entityId',
+        'actorName',
+        'actorRole',
+        'reason',
+        'createdAt',
       ];
       rows = data.map((l) => ({
         auditId: l.id,
         action: l.action,
         entityType: l.entityType,
         entityId: l.entityId,
-        actorName: l.actor?.fullName || "SYSTEM",
-        actorRole: l.actor?.role || "SYSTEM",
-        reason: l.reason || "",
+        actorName: l.actor?.fullName || 'SYSTEM',
+        actorRole: l.actor?.role || 'SYSTEM',
+        reason: l.reason || '',
         createdAt: l.createdAt.toISOString(),
       }));
     }
@@ -438,8 +416,8 @@ export class SystemAdministrationService {
     await prisma.auditLog.create({
       data: {
         actorUserId: actor.id,
-        action: "ADMIN_REPORT_EXPORTED",
-        entityType: "ReportExport",
+        action: 'ADMIN_REPORT_EXPORTED',
+        entityType: 'ReportExport',
         entityId: dataset,
         afterDataJson: JSON.stringify({
           dataset,
@@ -450,7 +428,7 @@ export class SystemAdministrationService {
     });
 
     const content =
-      format === "csv"
+      format === 'csv'
         ? buildCsvDocument(headers, rows)
         : JSON.stringify(rows, null, 2);
 
@@ -469,20 +447,18 @@ export class SystemAdministrationService {
    */
   static async listAuditLogs(
     actor: AuthenticatedActor,
-    rawQuery: Record<string, unknown>,
+    rawQuery: Record<string, unknown>
   ) {
-    if (actor.role !== "ADMIN") {
-      throw ApiError.forbidden(
-        "Only Administrators can inspect the platform audit log.",
-      );
+    if (actor.role !== 'ADMIN') {
+      throw ApiError.forbidden('Only Administrators can inspect the platform audit log.');
     }
 
     const { page, limit, skip, filters } = parsePaginationAndFilters(
       rawQuery,
-      ["action", "entityType", "search"],
-      ["createdAt"],
-      "createdAt",
-      100,
+      ['action', 'entityType', 'search'],
+      ['createdAt'],
+      'createdAt',
+      100
     );
 
     const where: Prisma.AuditLogWhereInput = {};
@@ -507,11 +483,9 @@ export class SystemAdministrationService {
         where,
         skip,
         take: limit,
-        orderBy: { createdAt: "desc" },
+        orderBy: { createdAt: 'desc' },
         include: {
-          actor: {
-            select: { id: true, fullName: true, email: true, role: true },
-          },
+          actor: { select: { id: true, fullName: true, email: true, role: true } },
         },
       }),
     ]);
@@ -523,9 +497,9 @@ export class SystemAdministrationService {
         entityType: l.entityType,
         entityId: l.entityId,
         actorId: l.actorUserId,
-        actorName: l.actor?.fullName || "System Process",
+        actorName: l.actor?.fullName || 'System Process',
         actorEmail: l.actor?.email || null,
-        actorRole: l.actor?.role || "SYSTEM",
+        actorRole: l.actor?.role || 'SYSTEM',
         beforeDataJson: l.beforeDataJson,
         afterDataJson: l.afterDataJson,
         reason: l.reason,
@@ -540,34 +514,28 @@ export class SystemAdministrationService {
   /**
    * Retrieves the latest persisted platform settings snapshot from `audit_logs` (or default settings).
    */
-  static async getPlatformSettings(
-    actor: AuthenticatedActor,
-  ): Promise<PlatformSettingsDto> {
-    if (actor.role !== "ADMIN") {
-      throw ApiError.forbidden(
-        "Only Administrators can view platform settings.",
-      );
+  static async getPlatformSettings(actor: AuthenticatedActor): Promise<PlatformSettingsDto> {
+    if (actor.role !== 'ADMIN') {
+      throw ApiError.forbidden('Only Administrators can view platform settings.');
     }
 
     const latestConfigLog = await prisma.auditLog.findFirst({
       where: {
-        action: "PLATFORM_SETTINGS_UPDATED",
-        entityType: "PlatformSettings",
+        action: 'PLATFORM_SETTINGS_UPDATED',
+        entityType: 'PlatformSettings',
       },
-      orderBy: { createdAt: "desc" },
+      orderBy: { createdAt: 'desc' },
       include: { actor: { select: { fullName: true } } },
     });
 
     if (latestConfigLog && latestConfigLog.afterDataJson) {
       try {
-        const parsed = JSON.parse(
-          latestConfigLog.afterDataJson,
-        ) as Partial<PlatformSettingsDto>;
+        const parsed = JSON.parse(latestConfigLog.afterDataJson) as Partial<PlatformSettingsDto>;
         return {
           ...DEFAULT_PLATFORM_SETTINGS,
           ...parsed,
           updatedAt: latestConfigLog.createdAt.toISOString(),
-          updatedBy: latestConfigLog.actor?.fullName || "Administrator",
+          updatedBy: latestConfigLog.actor?.fullName || 'Administrator',
         };
       } catch {
         // Fallback to default settings
@@ -577,7 +545,7 @@ export class SystemAdministrationService {
     return {
       ...DEFAULT_PLATFORM_SETTINGS,
       updatedAt: new Date().toISOString(),
-      updatedBy: "System Default",
+      updatedBy: 'System Default',
     };
   }
 
@@ -586,12 +554,10 @@ export class SystemAdministrationService {
    */
   static async updatePlatformSettings(
     actor: AuthenticatedActor,
-    payload: Omit<PlatformSettingsDto, "updatedAt" | "updatedBy">,
+    payload: Omit<PlatformSettingsDto, 'updatedAt' | 'updatedBy'>
   ): Promise<PlatformSettingsDto> {
-    if (actor.role !== "ADMIN") {
-      throw ApiError.forbidden(
-        "Only Administrators can modify platform settings.",
-      );
+    if (actor.role !== 'ADMIN') {
+      throw ApiError.forbidden('Only Administrators can modify platform settings.');
     }
 
     const current = await this.getPlatformSettings(actor);
@@ -599,9 +565,9 @@ export class SystemAdministrationService {
     const log = await prisma.auditLog.create({
       data: {
         actorUserId: actor.id,
-        action: "PLATFORM_SETTINGS_UPDATED",
-        entityType: "PlatformSettings",
-        entityId: "SINGLE_INSTITUTE_CONFIG",
+        action: 'PLATFORM_SETTINGS_UPDATED',
+        entityType: 'PlatformSettings',
+        entityId: 'SINGLE_INSTITUTE_CONFIG',
         beforeDataJson: JSON.stringify(current),
         afterDataJson: JSON.stringify(payload),
       },
@@ -617,11 +583,59 @@ export class SystemAdministrationService {
   /**
    * Returns live Hostinger VPS runtime & adapter telemetry (`/admin/settings`).
    */
+  /**
+   * Scans all PENDING or OVERDUE installments across active/pending enrollments and dispatches
+   * omnichannel (WhatsApp + Email + In-App) payment reminders (`POST /api/v1/system/reminders/installments`).
+   */
+  static async dispatchInstallmentReminders(actor: AuthenticatedActor) {
+    if (actor.role !== 'ADMIN') {
+      throw ApiError.forbidden('Only Administrators can trigger batch installment reminders.');
+    }
+
+    const pendingInstallments = await prisma.installment.findMany({
+      where: {
+        status: { in: ['PENDING', 'OVERDUE'] },
+        enrollment: {
+          status: { in: ['ACTIVE', 'PENDING_PAYMENT', 'SUSPENDED_OVERDUE'] },
+        },
+      },
+      include: {
+        enrollment: {
+          include: {
+            student: { select: { id: true, fullName: true } },
+            course: { select: { code: true, title: true } },
+          },
+        },
+      },
+      orderBy: { dueAt: 'asc' },
+      take: 100,
+    });
+
+    const studentIds = Array.from(
+      new Set(pendingInstallments.map((i) => i.enrollment.studentId))
+    );
+
+    const dispatchResult = await OmnichannelMessagingService.dispatchToUsers({
+      actorId: actor.id,
+      eventType: 'INSTALLMENT_REMINDER',
+      courseCode: 'FINANCE-DUE',
+      title: 'Upcoming / Pending Course Fee Installment Reminder',
+      body: 'You have a pending course fee installment on your learning account. Please visit Installments & Dues in your Student Portal to complete verification before your grace period expires.',
+      recipientUserIds: studentIds,
+    });
+
+    return {
+      remindedInstallmentsCount: pendingInstallments.length,
+      uniqueStudentsNotified: studentIds.length,
+      channelsDispatched: dispatchResult.channelsDispatched,
+      skippedChannels: dispatchResult.skippedChannels,
+      dispatchedAt: new Date().toISOString(),
+    };
+  }
+
   static async getVpsReadiness(actor: AuthenticatedActor) {
-    if (actor.role !== "ADMIN") {
-      throw ApiError.forbidden(
-        "Only Administrators can inspect VPS infrastructure telemetry.",
-      );
+    if (actor.role !== 'ADMIN') {
+      throw ApiError.forbidden('Only Administrators can inspect VPS infrastructure telemetry.');
     }
 
     const mem = process.memoryUsage();
@@ -632,13 +646,13 @@ export class SystemAdministrationService {
       uptimeSeconds: Math.round(process.uptime()),
       rssMemoryMb: Number((mem.rss / (1024 * 1024)).toFixed(1)),
       heapUsedMb: Number((mem.heapUsed / (1024 * 1024)).toFixed(1)),
-      storageDriver: process.env.STORAGE_DRIVER || "LOCAL_VPS",
+      storageDriver: process.env.STORAGE_DRIVER || 'LOCAL_VPS',
       adapters: {
-        databaseMysql: "CONNECTED",
-        liveVideo100ms: "HMS_100MS_READY",
-        paymentsRazorpay: "RAZORPAY_ADAPTER_READY",
-        recordingsYouTube: "YOUTUBE_SAFE_EMBED_READY",
-        upiEncryptionAes256Gcm: "ACTIVE",
+        databaseMysql: 'CONNECTED',
+        liveVideo100ms: 'HMS_100MS_READY',
+        paymentsRazorpay: 'RAZORPAY_ADAPTER_READY',
+        recordingsYouTube: 'YOUTUBE_SAFE_EMBED_READY',
+        upiEncryptionAes256Gcm: 'ACTIVE',
       },
     };
   }
@@ -651,107 +665,92 @@ export class SystemAdministrationService {
 export class SystemAdministrationController {
   static getReports = catchAsync(async (req: Request, res: Response) => {
     if (!req.user) throw ApiError.unauthorized();
-    const data = await SystemAdministrationService.getExecutiveReports(
-      req.user,
-    );
-    return apiResponse(
-      res,
-      200,
-      "Executive reports retrieved successfully",
-      data,
-    );
+    const data = await SystemAdministrationService.getExecutiveReports(req.user);
+    return apiResponse(res, 200, 'Executive reports retrieved successfully', data);
   });
 
   static exportReport = catchAsync(async (req: Request, res: Response) => {
     if (!req.user) throw ApiError.unauthorized();
-    const dataset =
-      (req.query.dataset as
-        | "payments"
-        | "enrollments"
-        | "payouts"
-        | "attendance"
-        | "audit_logs") || "payments";
-    const format = (req.query.format as "csv" | "json") || "csv";
+    const dataset = (req.query.dataset as
+      | 'payments'
+      | 'enrollments'
+      | 'payouts'
+      | 'attendance'
+      | 'audit_logs') || 'payments';
+    const format = (req.query.format as 'csv' | 'json') || 'csv';
     const exported = await SystemAdministrationService.exportDataset(
       req.user,
       dataset,
-      format,
+      format
     );
-    return apiResponse(
-      res,
-      200,
-      "Dataset export generated and audited",
-      exported,
-    );
+    return apiResponse(res, 200, 'Dataset export generated and audited', exported);
   });
 
   static listAuditLogs = catchAsync(async (req: Request, res: Response) => {
     if (!req.user) throw ApiError.unauthorized();
     const result = await SystemAdministrationService.listAuditLogs(
       req.user,
-      req.query as Record<string, unknown>,
+      req.query as Record<string, unknown>
     );
     return apiResponse(
       res,
       200,
-      "Append-only audit logs retrieved successfully",
+      'Append-only audit logs retrieved successfully',
       result.items,
-      result.meta,
+      result.meta
     );
   });
 
   static getSettings = catchAsync(async (req: Request, res: Response) => {
     if (!req.user) throw ApiError.unauthorized();
-    const settings = await SystemAdministrationService.getPlatformSettings(
-      req.user,
-    );
-    return apiResponse(res, 200, "Platform settings retrieved", settings);
+    const settings = await SystemAdministrationService.getPlatformSettings(req.user);
+    return apiResponse(res, 200, 'Platform settings retrieved', settings);
   });
 
   static updateSettings = catchAsync(async (req: Request, res: Response) => {
     if (!req.user) throw ApiError.unauthorized();
     const updated = await SystemAdministrationService.updatePlatformSettings(
       req.user,
-      req.body,
+      req.body
     );
+    return apiResponse(res, 200, 'Platform settings updated and audited', updated);
+  });
+
+  static sendInstallmentReminders = catchAsync(async (req: Request, res: Response) => {
+    if (!req.user) throw ApiError.unauthorized();
+    const result = await SystemAdministrationService.dispatchInstallmentReminders(req.user);
     return apiResponse(
       res,
       200,
-      "Platform settings updated and audited",
-      updated,
+      'Installment fee reminders dispatched via active WhatsApp & Email channels',
+      result
     );
   });
 
   static getVpsReadiness = catchAsync(async (req: Request, res: Response) => {
     if (!req.user) throw ApiError.unauthorized();
     const health = await SystemAdministrationService.getVpsReadiness(req.user);
-    return apiResponse(
-      res,
-      200,
-      "Hostinger VPS readiness telemetry retrieved",
-      health,
-    );
+    return apiResponse(res, 200, 'Hostinger VPS readiness telemetry retrieved', health);
   });
 }
 
 export const systemRouter = Router();
 systemRouter.use(authenticate);
-systemRouter.use(authorizeRoles("ADMIN"));
+systemRouter.use(authorizeRoles('ADMIN'));
 
-systemRouter.get("/reports", SystemAdministrationController.getReports);
+systemRouter.get('/reports', SystemAdministrationController.getReports);
 systemRouter.get(
-  "/reports/export",
+  '/reports/export',
   validateRequest(exportReportQueryValidation),
-  SystemAdministrationController.exportReport,
+  SystemAdministrationController.exportReport
 );
-systemRouter.get("/audit-logs", SystemAdministrationController.listAuditLogs);
-systemRouter.get("/settings", SystemAdministrationController.getSettings);
+systemRouter.get('/audit-logs', SystemAdministrationController.listAuditLogs);
+systemRouter.get('/settings', SystemAdministrationController.getSettings);
 systemRouter.patch(
-  "/settings",
+  '/settings',
   validateRequest(updatePlatformSettingsValidation),
-  SystemAdministrationController.updateSettings,
+  SystemAdministrationController.updateSettings
 );
-systemRouter.get(
-  "/vps-readiness",
-  SystemAdministrationController.getVpsReadiness,
-);
+systemRouter.get('/vps-readiness', SystemAdministrationController.getVpsReadiness);
+
+systemRouter.post('/reminders/installments', SystemAdministrationController.sendInstallmentReminders);

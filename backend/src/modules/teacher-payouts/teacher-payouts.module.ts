@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { Request, Response, Router } from 'express';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../config/prisma';
+import { env } from '../../config/env';
 import { AuthenticatedActor } from '../../types/express';
 import { ApiError } from '../../utils/ApiError';
 import { apiResponse } from '../../utils/apiResponse';
@@ -9,12 +10,59 @@ import { catchAsync } from '../../utils/catchAsync';
 import { authenticate, authorizeRoles } from '../../middlewares/auth.middleware';
 import { validateRequest } from '../../middlewares/validate.middleware';
 
+/**
+ * Pure deterministic calculator for Teacher Revenue-Share Payouts with Indian Section 194J TDS deduction.
+ * - Gross Teacher Share = `grossCourseCollections * (revenueSharePercent / 100)`
+ * - TDS under Section 194J (Professional / Technical Services) = `grossTeacherShare * (tdsPercent / 100)` (Default 10%)
+ * - Net Disbursable Payout = `max(0, grossTeacherShare - tdsAmount + adjustments)`
+ */
+export function computeTeacherPayoutWithSection194JTds(params: {
+  grossCollectionsInr: number;
+  revenueSharePercent: number;
+  tdsPercent?: number;
+  adjustmentsInr?: number;
+}): {
+  grossCollectionsInr: string;
+  revenueSharePercent: string;
+  grossShareAmountInr: string;
+  tdsSection: '194J';
+  tdsPercent: string;
+  tdsAmountInr: string;
+  adjustmentsInr: string;
+  netPayoutAmountInr: string;
+} {
+  const grossCollections = Math.max(0, Number(params.grossCollectionsInr) || 0);
+  const sharePct = Math.max(0, Math.min(100, Number(params.revenueSharePercent) || 0));
+  const tdsPct =
+    params.tdsPercent !== undefined
+      ? Math.max(0, Math.min(50, Number(params.tdsPercent)))
+      : env.DEFAULT_TEACHER_TDS_PERCENT ?? 10;
+  const adjustments = Number(params.adjustmentsInr) || 0;
+
+  const grossShareCents = Math.round(grossCollections * sharePct);
+  const tdsCents = Math.round((grossShareCents * tdsPct) / 100);
+  const adjCents = Math.round(adjustments * 100);
+  const netCents = Math.max(0, grossShareCents - tdsCents + adjCents);
+
+  return {
+    grossCollectionsInr: grossCollections.toFixed(2),
+    revenueSharePercent: sharePct.toFixed(2),
+    grossShareAmountInr: (grossShareCents / 100).toFixed(2),
+    tdsSection: '194J',
+    tdsPercent: tdsPct.toFixed(2),
+    tdsAmountInr: (tdsCents / 100).toFixed(2),
+    adjustmentsInr: (adjCents / 100).toFixed(2),
+    netPayoutAmountInr: (netCents / 100).toFixed(2),
+  };
+}
+
 export const generatePayoutBatchValidation = {
   body: z.object({
     teacherId: z.string().uuid(),
     courseId: z.string().uuid(),
     periodStart: z.string().min(10),
     periodEnd: z.string().min(10),
+    tdsPercent: z.number().min(0).max(50).default(10),
     adjustments: z.number().default(0),
     notes: z.string().trim().max(255).optional(),
   }),
@@ -32,7 +80,7 @@ export const settleTeacherPayoutValidation = {
 
 export class TeacherPayoutsService {
   /**
-   * Lists teacher revenue-share payout statements (C-014, C-029):
+   * Lists teacher revenue-share payout statements (C-014, C-029) enriched with Section 194J TDS breakdown:
    * - TEACHER: Strictly own payout statements (`teacherId = actor.id`).
    * - ADMIN: All platform teacher payouts.
    */
@@ -53,32 +101,44 @@ export class TeacherPayoutsService {
       orderBy: { createdAt: 'desc' },
     });
 
-    return rows.map((p) => ({
-      id: p.id,
-      teacherId: p.teacherId,
-      teacherName: p.teacher.fullName,
-      teacherEmail: p.teacher.email,
-      courseId: p.courseId,
-      periodStart: p.periodStart.toISOString().slice(0, 10),
-      periodEnd: p.periodEnd.toISOString().slice(0, 10),
-      grossCourseCollections: p.grossCourseCollections.toFixed(2),
-      revenueSharePercentSnapshot: p.revenueSharePercentSnapshot.toFixed(2),
-      grossPayoutAmount: p.grossPayoutAmount.toFixed(2),
-      adjustments: p.adjustments.toFixed(2),
-      netPayoutAmount: p.netPayoutAmount.toFixed(2),
-      currency: p.currency,
-      status: p.status,
-      approvedBy: p.approver?.fullName || null,
-      paidAt: p.paidAt ? p.paidAt.toISOString() : null,
-      paymentReference: p.paymentReference,
-      notes: p.notes,
-      createdAt: p.createdAt.toISOString(),
-    }));
+    return rows.map((p) => {
+      const tdsCalc = computeTeacherPayoutWithSection194JTds({
+        grossCollectionsInr: Number(p.grossCourseCollections),
+        revenueSharePercent: Number(p.revenueSharePercentSnapshot),
+        tdsPercent: env.DEFAULT_TEACHER_TDS_PERCENT ?? 10,
+        adjustmentsInr: 0,
+      });
+
+      return {
+        id: p.id,
+        teacherId: p.teacherId,
+        teacherName: p.teacher.fullName,
+        teacherEmail: p.teacher.email,
+        courseId: p.courseId,
+        periodStart: p.periodStart.toISOString().slice(0, 10),
+        periodEnd: p.periodEnd.toISOString().slice(0, 10),
+        grossCourseCollections: p.grossCourseCollections.toFixed(2),
+        revenueSharePercentSnapshot: p.revenueSharePercentSnapshot.toFixed(2),
+        grossPayoutAmount: p.grossPayoutAmount.toFixed(2),
+        tdsSection: '194J' as const,
+        tdsPercent: tdsCalc.tdsPercent,
+        tdsAmount: tdsCalc.tdsAmountInr,
+        adjustments: p.adjustments.toFixed(2),
+        netPayoutAmount: p.netPayoutAmount.toFixed(2),
+        currency: p.currency,
+        status: p.status,
+        approvedBy: p.approver?.fullName || null,
+        paidAt: p.paidAt ? p.paidAt.toISOString() : null,
+        paymentReference: p.paymentReference,
+        notes: p.notes,
+        createdAt: p.createdAt.toISOString(),
+      };
+    });
   }
 
   /**
    * Calculates and generates a Teacher Revenue-Share Payout statement from verified `CAPTURED`
-   * course collections in `payment_transactions` for an assigned course (C-029).
+   * course collections in `payment_transactions` for an assigned course (C-029), applying Section 194J TDS (default 10%).
    */
   static async generateRevenueSharePayout(
     actor: AuthenticatedActor,
@@ -87,6 +147,7 @@ export class TeacherPayoutsService {
       courseId: string;
       periodStart: string;
       periodEnd: string;
+      tdsPercent?: number;
       adjustments: number;
       notes?: string;
     }
@@ -126,11 +187,24 @@ export class TeacherPayoutsService {
       _sum: { amount: true },
     });
 
-    const grossCollections = capturedAgg._sum.amount || new Prisma.Decimal(0);
-    const sharePct = assignment.revenueSharePercent;
-    const grossPayout = grossCollections.mul(sharePct).div(new Prisma.Decimal(100));
-    const adjDecimal = new Prisma.Decimal(payload.adjustments.toFixed(2));
-    const netPayout = Prisma.Decimal.max(new Prisma.Decimal(0), grossPayout.add(adjDecimal));
+    const grossCollections = Number(capturedAgg._sum.amount || 0);
+    const sharePct = Number(assignment.revenueSharePercent);
+    const tdsPercent = payload.tdsPercent ?? env.DEFAULT_TEACHER_TDS_PERCENT ?? 10;
+
+    const calc = computeTeacherPayoutWithSection194JTds({
+      grossCollectionsInr: grossCollections,
+      revenueSharePercent: sharePct,
+      tdsPercent,
+      adjustmentsInr: payload.adjustments,
+    });
+
+    // Store net adjustment = (adjustments - tdsAmount) in `adjustments` column so DB columns reconcile cleanly
+    const netAdjustmentWithTds = (
+      Number(calc.adjustmentsInr) - Number(calc.tdsAmountInr)
+    ).toFixed(2);
+    const notesWithTds = `${
+      payload.notes || 'Monthly revenue-share payout'
+    } [Sec 194J TDS @ ${calc.tdsPercent}% = ₹${calc.tdsAmountInr} deducted]`;
 
     return prisma.$transaction(async (tx) => {
       const created = await tx.teacherPayout.create({
@@ -139,15 +213,15 @@ export class TeacherPayoutsService {
           courseId: payload.courseId,
           periodStart: startDate,
           periodEnd: endDate,
-          grossCourseCollections: grossCollections,
-          revenueSharePercentSnapshot: sharePct,
-          grossPayoutAmount: grossPayout,
-          adjustments: adjDecimal,
-          netPayoutAmount: netPayout,
+          grossCourseCollections: new Prisma.Decimal(calc.grossCollectionsInr),
+          revenueSharePercentSnapshot: new Prisma.Decimal(calc.revenueSharePercent),
+          grossPayoutAmount: new Prisma.Decimal(calc.grossShareAmountInr),
+          adjustments: new Prisma.Decimal(netAdjustmentWithTds),
+          netPayoutAmount: new Prisma.Decimal(calc.netPayoutAmountInr),
           currency: 'INR',
           status: 'APPROVED',
           approvedById: actor.id,
-          notes: payload.notes || null,
+          notes: notesWithTds.slice(0, 255),
         },
       });
 
@@ -160,14 +234,17 @@ export class TeacherPayoutsService {
           afterDataJson: JSON.stringify({
             teacherId: payload.teacherId,
             courseId: payload.courseId,
-            grossCollections: grossCollections.toFixed(2),
-            sharePct: sharePct.toFixed(2),
-            netPayout: netPayout.toFixed(2),
+            ...calc,
           }),
         },
       });
 
-      return created;
+      return {
+        ...created,
+        tdsSection: '194J',
+        tdsPercent: calc.tdsPercent,
+        tdsAmount: calc.tdsAmountInr,
+      };
     });
   }
 
@@ -216,7 +293,12 @@ export class TeacherPayoutsController {
   static generatePayout = catchAsync(async (req: Request, res: Response) => {
     if (!req.user) throw ApiError.unauthorized();
     const created = await TeacherPayoutsService.generateRevenueSharePayout(req.user, req.body);
-    return apiResponse(res, 201, 'Teacher revenue-share payout generated', created);
+    return apiResponse(
+      res,
+      201,
+      'Teacher revenue-share payout generated with Section 194J TDS deduction',
+      created
+    );
   });
 
   static updateStatus = catchAsync(async (req: Request, res: Response) => {

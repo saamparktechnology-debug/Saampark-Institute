@@ -6,6 +6,25 @@ export interface LoginRequestDto {
   rolePanel: RoleType;
 }
 
+export interface RequestOtpDto {
+  email: string;
+  rolePanel: RoleType;
+  purpose?: 'PASSWORD_RESET' | 'OTP_LOGIN';
+}
+
+export interface ResetPasswordWithOtpDto {
+  email: string;
+  rolePanel: RoleType;
+  otp: string;
+  newPassword: string;
+}
+
+export interface LoginWithOtpDto {
+  email: string;
+  rolePanel: RoleType;
+  otp: string;
+}
+
 export interface StudentSignupRequestDto {
   fullName: string;
   email: string;
@@ -31,4 +50,15 @@ export interface AuthSessionResponseDto {
   accessToken: string;
   refreshToken: string;
   redirectTo: string;
+  evictedOldestSessionsCount?: number;
+}
+
+export interface ActiveDeviceSessionDto {
+  id: string;
+  rolePanel: RoleType;
+  ipAddress: string | null;
+  userAgent: string | null;
+  createdAt: string;
+  expiresAt: string;
+  isCurrentSession: boolean;
 }

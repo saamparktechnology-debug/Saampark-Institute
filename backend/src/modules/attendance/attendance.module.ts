@@ -17,9 +17,10 @@ import {
   authorizeRoles,
 } from '../../middlewares/auth.middleware';
 import { validateRequest } from '../../middlewares/validate.middleware';
+import { OmnichannelMessagingService } from '../../integrations/messaging.adapter';
 
 // ----------------------------------------------------------------------------
-// ATTENDANCE CODE HASHING & RATE LIMITER (C-008, O-021)
+// ATTENDANCE CODE HASHING, RATE LIMITER & LOW-ATTENDANCE RECOVERY MATH (C-008, O-021)
 // ----------------------------------------------------------------------------
 
 export function hashAttendanceCode(code: string): string {
@@ -31,6 +32,57 @@ export function verifyAttendanceCodeHash(rawCode: string, expectedHash: string):
   const a = Buffer.from(actualHash, 'hex');
   const b = Buffer.from(expectedHash, 'hex');
   return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+/**
+ * Computes exact attendance percentage and how many consecutive future sessions a student
+ * must attend to reach `minAttendancePercent` (default 75%).
+ * Formula: `(present + k) / (total + k) >= threshold / 100`
+ */
+export function computeLowAttendanceRecoveryStats(params: {
+  presentCount: number;
+  totalSessionsCount: number;
+  minAttendancePercent?: number;
+}) {
+  const threshold = params.minAttendancePercent ?? 75;
+  if (params.totalSessionsCount <= 0) {
+    return {
+      attendancePercent: 100,
+      isBelowThreshold: false,
+      consecutiveClassesNeededToRecover: 0,
+    };
+  }
+
+  const attendancePercent = Number(
+    ((params.presentCount / params.totalSessionsCount) * 100).toFixed(1)
+  );
+  const isBelowThreshold = attendancePercent < threshold;
+  if (!isBelowThreshold) {
+    return {
+      attendancePercent,
+      isBelowThreshold: false,
+      consecutiveClassesNeededToRecover: 0,
+    };
+  }
+
+  const targetRatio = threshold / 100;
+  if (targetRatio >= 1) {
+    return {
+      attendancePercent,
+      isBelowThreshold: true,
+      consecutiveClassesNeededToRecover: 99,
+    };
+  }
+
+  const needed = Math.ceil(
+    (targetRatio * params.totalSessionsCount - params.presentCount) / (1 - targetRatio)
+  );
+
+  return {
+    attendancePercent,
+    isBelowThreshold: true,
+    consecutiveClassesNeededToRecover: Math.max(1, needed),
+  };
 }
 
 // Per-student rate limit window: max 5 code submission attempts per 60 seconds (O-021)
@@ -103,6 +155,12 @@ export const updateAttendanceSessionStatusValidation = {
   }),
   body: z.object({
     status: z.enum(['OPEN', 'CLOSED', 'FINALIZED']),
+  }),
+};
+
+export const dispatchLowAttendanceAlertsValidation = {
+  body: z.object({
+    courseId: z.string().uuid('Valid courseId UUID is required').optional(),
   }),
 };
 
@@ -254,10 +312,7 @@ export class AttendanceService {
   }
 
   /**
-   * Teacher or Admin generates a new 6-digit session attendance code (`O-021`, `C-008`):
-   * - Generates a random 6-digit code (`100000`–`999999`).
-   * - Stores ONLY `codeHash` (SHA-256) in `attendance_sessions`.
-   * - Returns the plaintext `generatedCode` one time in the creation response so the teacher can display it in class.
+   * Teacher or Admin generates a new 6-digit session attendance code (`O-021`, `C-008`).
    */
   static async generateSessionCode(
     actor: AuthenticatedActor,
@@ -327,11 +382,7 @@ export class AttendanceService {
   }
 
   /**
-   * Student submits a 6-digit session attendance code (`C-008`, `O-021`):
-   * - Rate-limited to max 5 attempts/minute per `(studentId, sessionId)`.
-   * - Verifies student holds an ACTIVE or COMPLETED enrollment in the session's course (`C-027`).
-   * - Verifies session is `OPEN` and `now <= codeExpiresAt` (`ATTENDANCE_CODE_EXPIRED`).
-   * - Verifies SHA-256 hash using `crypto.timingSafeEqual`.
+   * Student submits a 6-digit session attendance code (`C-008`, `O-021`).
    */
   static async submitAttendanceCode(
     actor: AuthenticatedActor,
@@ -423,7 +474,6 @@ export class AttendanceService {
 
   /**
    * Teacher or Admin manually marks or overrides a student's attendance record (`O-021`).
-   * Requires a mandatory `correctionReason` and logs an append-only `AuditLog` entry.
    */
   static async manualOverrideAttendance(
     actor: AuthenticatedActor,
@@ -447,7 +497,6 @@ export class AttendanceService {
 
     await assertCourseAccessScope(actor, session.courseId);
 
-    // Ensure the target student is enrolled in the course
     const enrollment = await prisma.enrollment.findFirst({
       where: {
         courseId: session.courseId,
@@ -529,7 +578,6 @@ export class AttendanceService {
 
   /**
    * Closes or finalizes an attendance session.
-   * When finalized, any active enrolled students without an attendance record are marked ABSENT.
    */
   static async updateSessionStatus(
     actor: AuthenticatedActor,
@@ -602,6 +650,128 @@ export class AttendanceService {
       return updated;
     });
   }
+
+  /**
+   * Identifies enrolled students falling below the course's `minAttendancePercent` (default 75%)
+   * and dispatches automated Low-Attendance Early Warning notifications via Email + WhatsApp + In-App (`POST /api/v1/attendance/low-attendance-alerts`).
+   */
+  static async dispatchLowAttendanceAlerts(
+    actor: AuthenticatedActor,
+    payload: { courseId?: string }
+  ) {
+    if (actor.role !== 'ADMIN' && actor.role !== 'TEACHER') {
+      throw ApiError.forbidden(
+        'Only Administrators or assigned Teachers can trigger low-attendance warning alerts.'
+      );
+    }
+
+    if (payload.courseId) {
+      await assertCourseAccessScope(actor, payload.courseId);
+    }
+
+    const courseWhere: Prisma.CourseWhereInput = payload.courseId
+      ? { id: payload.courseId }
+      : actor.role === 'TEACHER'
+      ? {
+          teacherAssignments: {
+            some: { teacherId: actor.id, status: 'ACTIVE' },
+          },
+        }
+      : {};
+
+    const courses = await prisma.course.findMany({
+      where: courseWhere,
+      include: {
+        enrollments: {
+          where: { status: { in: ['ACTIVE', 'COMPLETED'] } },
+          include: {
+            student: { select: { id: true, fullName: true, email: true, phone: true } },
+          },
+        },
+        attendanceSessions: {
+          include: {
+            records: true,
+          },
+        },
+      },
+    });
+
+    const alertedStudents: Array<{
+      studentId: string;
+      studentName: string;
+      studentEmail: string;
+      courseCode: string;
+      attendancePercent: number;
+      minAttendancePercent: number;
+      consecutiveClassesNeededToRecover: number;
+    }> = [];
+
+    for (const course of courses) {
+      const totalSessions = course.attendanceSessions.length;
+      if (totalSessions === 0) continue;
+
+      const minPct = Number(course.minAttendancePercent) || 75;
+
+      for (const enr of course.enrollments) {
+        let presentCount = 0;
+        for (const sess of course.attendanceSessions) {
+          const rec = sess.records.find((r) => r.studentId === enr.studentId);
+          if (
+            rec &&
+            (rec.status === 'PRESENT' || rec.status === 'LATE' || rec.status === 'EXCUSED')
+          ) {
+            presentCount += 1;
+          }
+        }
+
+        const stats = computeLowAttendanceRecoveryStats({
+          presentCount,
+          totalSessionsCount: totalSessions,
+          minAttendancePercent: minPct,
+        });
+
+        if (stats.isBelowThreshold) {
+          alertedStudents.push({
+            studentId: enr.studentId,
+            studentName: enr.student.fullName,
+            studentEmail: enr.student.email,
+            courseCode: course.code,
+            attendancePercent: stats.attendancePercent,
+            minAttendancePercent: minPct,
+            consecutiveClassesNeededToRecover: stats.consecutiveClassesNeededToRecover,
+          });
+
+          await OmnichannelMessagingService.dispatchToUsers({
+            actorId: actor.id,
+            eventType: 'SYSTEM_ANNOUNCEMENT',
+            courseCode: course.code,
+            title: `Attendance Warning: ${course.code} (${stats.attendancePercent}% < ${minPct}%)`,
+            body: `Hello ${enr.student.fullName}, your current attendance in ${course.code} (${course.title}) is ${stats.attendancePercent}% (${presentCount}/${totalSessions} sessions), which is below the ${minPct}% certificate eligibility threshold. Please attend the next ${stats.consecutiveClassesNeededToRecover} consecutive live session(s) to restore eligibility.`,
+            recipientUserIds: [enr.studentId],
+          });
+        }
+      }
+    }
+
+    await prisma.auditLog.create({
+      data: {
+        actorUserId: actor.id,
+        action: 'LOW_ATTENDANCE_WARNING_DISPATCHED',
+        entityType: 'AttendanceSession',
+        entityId: payload.courseId || 'ALL_ASSIGNED_COURSES',
+        afterDataJson: JSON.stringify({
+          alertedStudentsCount: alertedStudents.length,
+          alertedStudents,
+        }),
+      },
+    });
+
+    return {
+      alertedStudentsCount: alertedStudents.length,
+      alertedStudents,
+      dispatchedAt: new Date().toISOString(),
+    };
+  }
 }
 
 // ----------------------------------------------------------------------------
@@ -658,6 +828,17 @@ export class AttendanceController {
     );
     return apiResponse(res, 200, 'Attendance session status updated', updated);
   });
+
+  static dispatchLowAttendanceAlerts = catchAsync(async (req: Request, res: Response) => {
+    if (!req.user) throw ApiError.unauthorized();
+    const result = await AttendanceService.dispatchLowAttendanceAlerts(req.user, req.body);
+    return apiResponse(
+      res,
+      200,
+      `Dispatched low-attendance warnings to ${result.alertedStudentsCount} student(s)`,
+      result
+    );
+  });
 }
 
 export const attendanceRouter = Router();
@@ -687,4 +868,10 @@ attendanceRouter.patch(
   authorizeRoles('ADMIN', 'TEACHER'),
   validateRequest(updateAttendanceSessionStatusValidation),
   AttendanceController.updateStatus
+);
+attendanceRouter.post(
+  '/low-attendance-alerts',
+  authorizeRoles('ADMIN', 'TEACHER'),
+  validateRequest(dispatchLowAttendanceAlertsValidation),
+  AttendanceController.dispatchLowAttendanceAlerts
 );

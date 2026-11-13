@@ -1,17 +1,18 @@
-import { z } from "zod";
-import { Request, Response, Router } from "express";
-import { CourseStatus, Prisma, SubmissionStatus } from "@prisma/client";
-import { prisma } from "../../config/prisma";
-import { AuthenticatedActor } from "../../types/express";
-import { ApiError } from "../../utils/ApiError";
-import { apiResponse } from "../../utils/apiResponse";
-import { catchAsync } from "../../utils/catchAsync";
+import { z } from 'zod';
+import { Request, Response, Router } from 'express';
+import { CourseStatus, Prisma, SubmissionStatus } from '@prisma/client';
+import { prisma } from '../../config/prisma';
+import { AuthenticatedActor } from '../../types/express';
+import { ApiError } from '../../utils/ApiError';
+import { apiResponse } from '../../utils/apiResponse';
+import { catchAsync } from '../../utils/catchAsync';
 import {
   assertCourseAccessScope,
   authenticate,
   authorizeRoles,
-} from "../../middlewares/auth.middleware";
-import { validateRequest } from "../../middlewares/validate.middleware";
+} from '../../middlewares/auth.middleware';
+import { validateRequest } from '../../middlewares/validate.middleware';
+import { OmnichannelMessagingService } from '../../integrations/messaging.adapter';
 
 // ----------------------------------------------------------------------------
 // VALIDATION SCHEMAS
@@ -19,31 +20,24 @@ import { validateRequest } from "../../middlewares/validate.middleware";
 
 export const createAssignmentValidation = {
   body: z.object({
-    courseId: z.string().uuid("Valid courseId UUID is required"),
-    title: z.string().trim().min(3, "Assignment title is required").max(200),
-    instructions: z
-      .string()
-      .trim()
-      .min(10, "Detailed instructions are required"),
-    maxMarks: z
-      .number()
-      .positive("maxMarks must be positive")
-      .max(1000)
-      .default(100),
-    dueAt: z.string().min(10, "Valid dueAt timestamp is required"),
-    status: z.enum(["DRAFT", "PUBLISHED", "ARCHIVED"]).default("PUBLISHED"),
+    courseId: z.string().uuid('Valid courseId UUID is required'),
+    title: z.string().trim().min(3, 'Assignment title is required').max(200),
+    instructions: z.string().trim().min(10, 'Detailed instructions are required'),
+    maxMarks: z.number().positive('maxMarks must be positive').max(1000).default(100),
+    dueAt: z.string().min(10, 'Valid dueAt timestamp is required'),
+    status: z.enum(['DRAFT', 'PUBLISHED', 'ARCHIVED']).default('PUBLISHED'),
   }),
 };
 
 export const submitAssignmentValidation = {
   params: z.object({
-    assignmentId: z.string().uuid("Valid assignmentId UUID is required"),
+    assignmentId: z.string().uuid('Valid assignmentId UUID is required'),
   }),
   body: z.object({
     submissionText: z
       .string()
       .trim()
-      .min(5, "Provide your solution text or repository/document notes")
+      .min(5, 'Provide your solution text or repository/document notes')
       .max(10000),
     fileName: z.string().trim().max(255).optional(),
   }),
@@ -51,22 +45,18 @@ export const submitAssignmentValidation = {
 
 export const gradeSubmissionValidation = {
   params: z.object({
-    submissionId: z.string().uuid("Valid submissionId UUID is required"),
+    submissionId: z.string().uuid('Valid submissionId UUID is required'),
   }),
   body: z.object({
-    marksAwarded: z.number().min(0, "Marks cannot be negative"),
-    feedback: z
-      .string()
-      .trim()
-      .min(3, "Provide constructive grading feedback")
-      .max(2000),
-    status: z.enum(["GRADED", "RESUBMIT_REQUESTED"]).default("GRADED"),
+    marksAwarded: z.number().min(0, 'Marks cannot be negative'),
+    feedback: z.string().trim().min(3, 'Provide constructive grading feedback').max(2000),
+    status: z.enum(['GRADED', 'RESUBMIT_REQUESTED']).default('GRADED'),
   }),
 };
 
 export const assignmentIdParamValidation = {
   params: z.object({
-    assignmentId: z.string().uuid("Valid assignmentId UUID is required"),
+    assignmentId: z.string().uuid('Valid assignmentId UUID is required'),
   }),
 };
 
@@ -84,31 +74,31 @@ export class AssignmentsService {
    */
   static async listAssignments(
     actor: AuthenticatedActor,
-    rawQuery: Record<string, unknown>,
+    rawQuery: Record<string, unknown>
   ) {
     const where: Prisma.AssignmentWhereInput = {};
 
-    if (typeof rawQuery.courseId === "string" && rawQuery.courseId.trim()) {
+    if (typeof rawQuery.courseId === 'string' && rawQuery.courseId.trim()) {
       await assertCourseAccessScope(actor, rawQuery.courseId.trim());
       where.courseId = rawQuery.courseId.trim();
     }
 
-    if (actor.role === "TEACHER") {
+    if (actor.role === 'TEACHER') {
       where.course = {
         teacherAssignments: {
           some: {
             teacherId: actor.id,
-            status: "ACTIVE",
+            status: 'ACTIVE',
           },
         },
       };
-    } else if (actor.role === "STUDENT") {
-      where.status = "PUBLISHED";
+    } else if (actor.role === 'STUDENT') {
+      where.status = 'PUBLISHED';
       where.course = {
         enrollments: {
           some: {
             studentId: actor.id,
-            status: { in: ["ACTIVE", "COMPLETED"] },
+            status: { in: ['ACTIVE', 'COMPLETED'] },
           },
         },
       };
@@ -119,19 +109,19 @@ export class AssignmentsService {
       include: {
         course: { select: { id: true, code: true, title: true } },
         submissions: {
-          where: actor.role === "STUDENT" ? { studentId: actor.id } : undefined,
+          where: actor.role === 'STUDENT' ? { studentId: actor.id } : undefined,
           include: {
             student: { select: { id: true, fullName: true, email: true } },
             gradedBy: { select: { id: true, fullName: true } },
           },
-          orderBy: { submittedAt: "desc" },
+          orderBy: { submittedAt: 'desc' },
         },
       },
-      orderBy: { dueAt: "asc" },
+      orderBy: { dueAt: 'asc' },
     });
 
     return rows.map((a) => {
-      if (actor.role === "STUDENT") {
+      if (actor.role === 'STUDENT') {
         const own = a.submissions[0] || null;
         return {
           id: a.id,
@@ -145,7 +135,7 @@ export class AssignmentsService {
           status: a.status,
           createdAt: a.createdAt.toISOString(),
           pendingCount: 0,
-          gradedCount: own?.status === "GRADED" ? 1 : 0,
+          gradedCount: own?.status === 'GRADED' ? 1 : 0,
           mySubmission: own
             ? {
                 id: own.id,
@@ -153,9 +143,7 @@ export class AssignmentsService {
                 fileStorageKey: own.fileStorageKey,
                 attemptNumber: own.attemptNumber,
                 status: own.status,
-                marksAwarded: own.marksAwarded
-                  ? own.marksAwarded.toFixed(2)
-                  : null,
+                marksAwarded: own.marksAwarded ? own.marksAwarded.toFixed(2) : null,
                 feedback: own.feedback,
                 gradedByName: own.gradedBy?.fullName || null,
                 submittedAt: own.submittedAt.toISOString(),
@@ -167,11 +155,9 @@ export class AssignmentsService {
       }
 
       const pendingCount = a.submissions.filter(
-        (s) => s.status === "SUBMITTED" || s.status === "LATE",
+        (s) => s.status === 'SUBMITTED' || s.status === 'LATE'
       ).length;
-      const gradedCount = a.submissions.filter(
-        (s) => s.status === "GRADED",
-      ).length;
+      const gradedCount = a.submissions.filter((s) => s.status === 'GRADED').length;
 
       return {
         id: a.id,
@@ -219,22 +205,20 @@ export class AssignmentsService {
       maxMarks: number;
       dueAt: string;
       status: CourseStatus;
-    },
+    }
   ) {
-    if (actor.role !== "ADMIN" && actor.role !== "TEACHER") {
-      throw ApiError.forbidden(
-        "Only Administrators or assigned Teachers can create assignments.",
-      );
+    if (actor.role !== 'ADMIN' && actor.role !== 'TEACHER') {
+      throw ApiError.forbidden('Only Administrators or assigned Teachers can create assignments.');
     }
 
     await assertCourseAccessScope(actor, payload.courseId);
 
     const dueDate = new Date(payload.dueAt);
     if (Number.isNaN(dueDate.getTime())) {
-      throw ApiError.badRequest("Invalid dueAt date format.");
+      throw ApiError.badRequest('Invalid dueAt date format.');
     }
 
-    return prisma.$transaction(async (tx) => {
+    const createdAssignment = await prisma.$transaction(async (tx) => {
       const created = await tx.assignment.create({
         data: {
           courseId: payload.courseId,
@@ -253,8 +237,8 @@ export class AssignmentsService {
       await tx.auditLog.create({
         data: {
           actorUserId: actor.id,
-          action: "ASSIGNMENT_CREATED",
-          entityType: "Assignment",
+          action: 'ASSIGNMENT_CREATED',
+          entityType: 'Assignment',
           entityId: created.id,
           afterDataJson: JSON.stringify({
             courseId: created.courseId,
@@ -267,6 +251,16 @@ export class AssignmentsService {
 
       return created;
     });
+
+    await OmnichannelMessagingService.dispatchToCourseCohort({
+      actorId: actor.id,
+      courseId: createdAssignment.courseId,
+      eventType: 'ASSIGNMENT_PUBLISHED',
+      title: `New Assignment Posted: ${createdAssignment.title}`,
+      body: `A new assignment (${createdAssignment.title}) for ${createdAssignment.course.code} is due on ${createdAssignment.dueAt.toISOString().slice(0, 10)}.`,
+    });
+
+    return createdAssignment;
   }
 
   /**
@@ -276,28 +270,26 @@ export class AssignmentsService {
   static async submitAssignment(
     actor: AuthenticatedActor,
     assignmentId: string,
-    payload: { submissionText: string; fileName?: string },
+    payload: { submissionText: string; fileName?: string }
   ) {
-    if (actor.role !== "STUDENT") {
-      throw ApiError.forbidden(
-        "Only enrolled students can submit assignments.",
-      );
+    if (actor.role !== 'STUDENT') {
+      throw ApiError.forbidden('Only enrolled students can submit assignments.');
     }
 
     const assignment = await prisma.assignment.findUnique({
       where: { id: assignmentId },
     });
-    if (!assignment || assignment.status !== "PUBLISHED") {
-      throw ApiError.notFound("Published assignment not found.");
+    if (!assignment || assignment.status !== 'PUBLISHED') {
+      throw ApiError.notFound('Published assignment not found.');
     }
 
     await assertCourseAccessScope(actor, assignment.courseId);
 
     const now = new Date();
     const isLate = now.getTime() > assignment.dueAt.getTime();
-    const status: SubmissionStatus = isLate ? "LATE" : "SUBMITTED";
+    const status: SubmissionStatus = isLate ? 'LATE' : 'SUBMITTED';
     const sanitizedFile = payload.fileName
-      ? payload.fileName.replace(/[^a-zA-Z0-9._-]/g, "_")
+      ? payload.fileName.replace(/[^a-zA-Z0-9._-]/g, '_')
       : null;
     const fileStorageKey = sanitizedFile
       ? `courses/${assignment.courseId}/assignments/${assignment.id}/${actor.id}-${sanitizedFile}`
@@ -306,7 +298,7 @@ export class AssignmentsService {
     return prisma.$transaction(async (tx) => {
       const existing = await tx.assignmentSubmission.findFirst({
         where: { assignmentId: assignment.id, studentId: actor.id },
-        orderBy: { attemptNumber: "desc" },
+        orderBy: { attemptNumber: 'desc' },
       });
 
       const submission = existing
@@ -335,8 +327,8 @@ export class AssignmentsService {
       await tx.auditLog.create({
         data: {
           actorUserId: actor.id,
-          action: "ASSIGNMENT_SUBMITTED",
-          entityType: "AssignmentSubmission",
+          action: 'ASSIGNMENT_SUBMITTED',
+          entityType: 'AssignmentSubmission',
           entityId: submission.id,
           afterDataJson: JSON.stringify({
             assignmentId: assignment.id,
@@ -359,13 +351,11 @@ export class AssignmentsService {
     payload: {
       marksAwarded: number;
       feedback: string;
-      status: "GRADED" | "RESUBMIT_REQUESTED";
-    },
+      status: 'GRADED' | 'RESUBMIT_REQUESTED';
+    }
   ) {
-    if (actor.role !== "ADMIN" && actor.role !== "TEACHER") {
-      throw ApiError.forbidden(
-        "Only Administrators or assigned Teachers can grade submissions.",
-      );
+    if (actor.role !== 'ADMIN' && actor.role !== 'TEACHER') {
+      throw ApiError.forbidden('Only Administrators or assigned Teachers can grade submissions.');
     }
 
     const submission = await prisma.assignmentSubmission.findUnique({
@@ -374,7 +364,7 @@ export class AssignmentsService {
     });
 
     if (!submission) {
-      throw ApiError.notFound("Assignment submission not found.");
+      throw ApiError.notFound('Assignment submission not found.');
     }
 
     await assertCourseAccessScope(actor, submission.assignment.courseId);
@@ -382,7 +372,7 @@ export class AssignmentsService {
     const maxMarksNum = Number(submission.assignment.maxMarks);
     if (payload.marksAwarded < 0 || payload.marksAwarded > maxMarksNum) {
       throw ApiError.unprocessable(
-        `Awarded marks (${payload.marksAwarded}) cannot exceed assignment maxMarks (${maxMarksNum}).`,
+        `Awarded marks (${payload.marksAwarded}) cannot exceed assignment maxMarks (${maxMarksNum}).`
       );
     }
 
@@ -405,13 +395,11 @@ export class AssignmentsService {
       await tx.auditLog.create({
         data: {
           actorUserId: actor.id,
-          action: "ASSIGNMENT_SUBMISSION_GRADED",
-          entityType: "AssignmentSubmission",
+          action: 'ASSIGNMENT_SUBMISSION_GRADED',
+          entityType: 'AssignmentSubmission',
           entityId: submissionId,
           beforeDataJson: submission.marksAwarded
-            ? JSON.stringify({
-                marksAwarded: submission.marksAwarded.toFixed(2),
-              })
+            ? JSON.stringify({ marksAwarded: submission.marksAwarded.toFixed(2) })
             : null,
           afterDataJson: JSON.stringify({
             marksAwarded: updated.marksAwarded?.toFixed(2),
@@ -434,18 +422,15 @@ export class AssignmentsController {
     if (!req.user) throw ApiError.unauthorized();
     const list = await AssignmentsService.listAssignments(
       req.user,
-      req.query as Record<string, unknown>,
+      req.query as Record<string, unknown>
     );
-    return apiResponse(res, 200, "Assignments retrieved successfully", list);
+    return apiResponse(res, 200, 'Assignments retrieved successfully', list);
   });
 
   static create = catchAsync(async (req: Request, res: Response) => {
     if (!req.user) throw ApiError.unauthorized();
-    const created = await AssignmentsService.createAssignment(
-      req.user,
-      req.body,
-    );
-    return apiResponse(res, 201, "Assignment created successfully", created);
+    const created = await AssignmentsService.createAssignment(req.user, req.body);
+    return apiResponse(res, 201, 'Assignment created successfully', created);
   });
 
   static submit = catchAsync(async (req: Request, res: Response) => {
@@ -453,9 +438,9 @@ export class AssignmentsController {
     const result = await AssignmentsService.submitAssignment(
       req.user,
       String(req.params.assignmentId),
-      req.body,
+      req.body
     );
-    return apiResponse(res, 201, "Assignment submission recorded", result);
+    return apiResponse(res, 201, 'Assignment submission recorded', result);
   });
 
   static grade = catchAsync(async (req: Request, res: Response) => {
@@ -463,36 +448,31 @@ export class AssignmentsController {
     const updated = await AssignmentsService.gradeSubmission(
       req.user,
       String(req.params.submissionId),
-      req.body,
+      req.body
     );
-    return apiResponse(
-      res,
-      200,
-      "Assignment submission graded and audited",
-      updated,
-    );
+    return apiResponse(res, 200, 'Assignment submission graded and audited', updated);
   });
 }
 
 export const assignmentsRouter = Router();
 assignmentsRouter.use(authenticate);
 
-assignmentsRouter.get("/", AssignmentsController.list);
+assignmentsRouter.get('/', AssignmentsController.list);
 assignmentsRouter.post(
-  "/",
-  authorizeRoles("ADMIN", "TEACHER"),
+  '/',
+  authorizeRoles('ADMIN', 'TEACHER'),
   validateRequest(createAssignmentValidation),
-  AssignmentsController.create,
+  AssignmentsController.create
 );
 assignmentsRouter.post(
-  "/:assignmentId/submit",
-  authorizeRoles("STUDENT"),
+  '/:assignmentId/submit',
+  authorizeRoles('STUDENT'),
   validateRequest(submitAssignmentValidation),
-  AssignmentsController.submit,
+  AssignmentsController.submit
 );
 assignmentsRouter.patch(
-  "/submissions/:submissionId/grade",
-  authorizeRoles("ADMIN", "TEACHER"),
+  '/submissions/:submissionId/grade',
+  authorizeRoles('ADMIN', 'TEACHER'),
   validateRequest(gradeSubmissionValidation),
-  AssignmentsController.grade,
+  AssignmentsController.grade
 );

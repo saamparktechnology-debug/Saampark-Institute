@@ -7,14 +7,17 @@ import {
   LiveClassItem,
   LiveClassParticipantItem,
   LiveRoomJoinTicket,
+  LowAttendanceAlertDispatchResult,
+  RecordingWatchProgressDto,
 } from '../types/live-learning.types';
 
 /**
- * 100% API-driven service for Phase 4 Live Learning (100ms), YouTube Recordings & Session Attendance.
+ * 100% API-driven service for Live Learning (Jitsi Meet IFrame API + YouTube Live + 100ms),
+ * YouTube Recordings & Session Attendance.
  * Zero hardcoded mock arrays.
  */
 export const liveLearningService = {
-  // 1. Live Classes (100ms Adapter)
+  // 1. Live Classes (Jitsi Meet Default + YouTube Live + 100ms)
   async listLiveClasses(params?: Record<string, string | number>): Promise<LiveClassItem[]> {
     const res = await apiClient.get<ApiEnvelope<LiveClassItem[]>>('/live-classes', { params });
     return res.data.data;
@@ -27,6 +30,8 @@ export const liveLearningService = {
     description?: string;
     scheduledStartAt: string;
     scheduledEndAt: string;
+    provider?: 'JITSI_MEET' | 'YOUTUBE_LIVE' | 'HMS_100MS';
+    youtubeLiveUrlOrId?: string | null;
   }): Promise<LiveClassItem> {
     const res = await apiClient.post<ApiEnvelope<LiveClassItem>>('/live-classes', payload);
     return res.data.data;
@@ -76,7 +81,7 @@ export const liveLearningService = {
     return res.data.data;
   },
 
-  // 2. YouTube Recorded Classes
+  // 2. YouTube Recorded Classes & Watch Progress
   async listRecordings(params?: Record<string, string | number>): Promise<ClassRecordingItem[]> {
     const res = await apiClient.get<ApiEnvelope<ClassRecordingItem[]>>('/recordings', { params });
     return res.data.data;
@@ -105,7 +110,22 @@ export const liveLearningService = {
     return res.data.data;
   },
 
-  // 3. Session Attendance Codes & Audited Manual Overrides
+  async saveWatchProgress(
+    recordingId: string,
+    payload: {
+      lastPositionSeconds: number;
+      watchedSeconds: number;
+      completed?: boolean;
+    }
+  ): Promise<RecordingWatchProgressDto> {
+    const res = await apiClient.post<ApiEnvelope<RecordingWatchProgressDto>>(
+      `/recordings/${recordingId}/progress`,
+      payload
+    );
+    return res.data.data;
+  },
+
+  // 3. Session Attendance Codes, Audited Manual Overrides & Low-Attendance Warnings
   async listAttendanceSessions(
     params?: Record<string, string | number>
   ): Promise<AttendanceSessionItem[]> {
@@ -173,6 +193,16 @@ export const liveLearningService = {
     const res = await apiClient.patch<ApiEnvelope<unknown>>(
       `/attendance/sessions/${sessionId}/status`,
       { status }
+    );
+    return res.data.data;
+  },
+
+  async dispatchLowAttendanceAlerts(payload?: {
+    courseId?: string;
+  }): Promise<LowAttendanceAlertDispatchResult> {
+    const res = await apiClient.post<ApiEnvelope<LowAttendanceAlertDispatchResult>>(
+      '/attendance/low-attendance-alerts',
+      payload || {}
     );
     return res.data.data;
   },
