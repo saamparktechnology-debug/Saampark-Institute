@@ -743,7 +743,7 @@ export class AttendanceService {
 
           await OmnichannelMessagingService.dispatchToUsers({
             actorId: actor.id,
-            eventType: 'SYSTEM_ANNOUNCEMENT',
+            eventType: 'COURSE_ANNOUNCEMENT',
             courseCode: course.code,
             title: `Attendance Warning: ${course.code} (${stats.attendancePercent}% < ${minPct}%)`,
             body: `Hello ${enr.student.fullName}, your current attendance in ${course.code} (${course.title}) is ${stats.attendancePercent}% (${presentCount}/${totalSessions} sessions), which is below the ${minPct}% certificate eligibility threshold. Please attend the next ${stats.consecutiveClassesNeededToRecover} consecutive live session(s) to restore eligibility.`,
